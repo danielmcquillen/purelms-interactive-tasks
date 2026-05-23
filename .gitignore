@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info/
+
+# Virtual environments
+.venv/
+
+# uv
+.uv-cache/
+
+# TypeScript / Node
+node_modules/
+*/frontend/dist/
+*/frontend/.vite/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# Build artifacts (per-backend dist/ — never check in)
+*/backend/build/
+
+# Vendored purelms-shared wheel — dev-only Docker-build staging
+# area, see justfile _stage-shared-wheel recipe. Regenerated on
+# every `just build <slug>` invocation.
+*/backend/_vendor/
