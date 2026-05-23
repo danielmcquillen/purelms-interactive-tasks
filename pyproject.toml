@@ -1,0 +1,87 @@
+[project]
+name = "purelms-backends"
+version = "0.1.0"
+description = "Container + frontend backends for PureLMS interactive task blocks"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Daniel McQuillen", email = "daniel@mcquilleninteractive.com" },
+]
+
+# This is a workspace root. The backends themselves are workspace
+# members; each declares its own pyproject.toml at <slug>/backend/.
+# Backends are NOT published as separate Python packages — they're
+# distributed as container images. The workspace exists to:
+#   - share dev-deps (pytest, ruff, etc.) across all backends
+#   - run lint + test from the repo root via uv
+#   - lock dependencies coherently across backends
+
+dependencies = [
+    # Pydantic envelope schemas — every backend reads + writes these.
+    # Floor matches purelms-shared's published minimum.
+    "purelms-shared>=0.2.0",
+]
+
+[tool.uv.sources]
+# Local sibling path for dev. Production-published backends will
+# pull from PyPI once purelms-shared is published.
+purelms-shared = { path = "../purelms-shared", editable = true }
+
+[tool.uv.workspace]
+# Each backend is its own workspace member with its own
+# pyproject.toml at <slug>/backend/. New backends get added here.
+members = [
+    "echo/backend",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<10",
+    "ruff>=0.15,<1",
+    "pre-commit>=4.0,<5",
+]
+
+
+# ==== pytest ====
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra --strict-markers"
+# Run tests from the workspace root; each member's tests/ dir is
+# auto-discovered.
+testpaths = [
+    "echo/backend/tests",
+]
+python_files = ["test_*.py"]
+
+
+# ==== ruff ====
+# Same lean ruleset as purelms-shared (no Django selectors needed).
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "F", "E", "W", "I", "N", "UP", "B", "A", "C4", "DTZ", "EM", "PIE",
+    "PT", "RET", "SIM", "TID", "TC", "PTH", "PL", "TRY", "RUF",
+]
+ignore = [
+    "PLR0913",  # too many args — domain runners legitimately need many
+    "E501",     # line length handled by ruff format
+    "TRY003",   # long exception messages
+    "EM101",
+    "EM102",
+    "COM812",
+    # Pydantic v2 runtime-type imports (same as purelms-shared).
+    "TC001",
+    "TC003",
+    "RUF002",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101", "PLR2004"]
+
+[tool.ruff.lint.isort]
+force-single-line = true

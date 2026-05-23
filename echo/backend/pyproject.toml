@@ -1,0 +1,23 @@
+[project]
+name = "purelms-backends-echo"
+version = "0.1.0"
+description = "Stub echo backend — permanent integration-test fixture for the PureLMS execution path"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "Daniel McQuillen", email = "daniel@mcquilleninteractive.com" },
+]
+dependencies = [
+    "purelms-shared>=0.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<10",
+]
+
+[tool.uv.sources]
+purelms-shared = { path = "../../../purelms-shared", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,20 @@
+{
+  "name": "@purelms-backends/echo-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Echo backend frontend bundle — the LMS-side integration-test fixture.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/echo.ts --bundle --minify --sourcemap --format=esm --outfile=dist/echo.js",
+    "watch": "esbuild src/echo.ts --bundle --sourcemap --format=esm --outfile=dist/echo.js --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.3",
+    "happy-dom": "^15.11.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}
