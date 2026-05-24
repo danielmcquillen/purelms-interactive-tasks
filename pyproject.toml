@@ -1,7 +1,7 @@
 [project]
-name = "purelms-backends"
+name = "purelms-interactive-tasks"
 version = "0.1.0"
-description = "Container + frontend backends for PureLMS interactive task blocks"
+description = "Container + frontend pairs that PureLMS launches as InteractiveTasks (per ADR-0014)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -10,18 +10,24 @@ authors = [
     { name = "Daniel McQuillen", email = "daniel@mcquilleninteractive.com" },
 ]
 
-# This is a workspace root. The backends themselves are workspace
+# This is a workspace root. Each InteractiveTask lives at <slug>/ with
+# paired backend/ (container) and frontend/ (ES module bundle)
+# subdirectories. The container's Python sources are uv workspace
 # members; each declares its own pyproject.toml at <slug>/backend/.
-# Backends are NOT published as separate Python packages — they're
-# distributed as container images. The workspace exists to:
-#   - share dev-deps (pytest, ruff, etc.) across all backends
+# The container itself is distributed as a Docker image (per slug,
+# per semver version) — it's NOT a published Python package.
+#
+# The workspace exists to:
+#   - share dev-deps (pytest, ruff, etc.) across all InteractiveTasks
 #   - run lint + test from the repo root via uv
 #   - lock dependencies coherently across backends
 
 dependencies = [
     # Pydantic envelope schemas — every backend reads + writes these.
-    # Floor matches purelms-shared's published minimum.
-    "purelms-shared>=0.2.0",
+    # Floor pinned to the version that introduced unit_block_id on
+    # SimulationInputEnvelope (Slice 3d sweep per ADR-0014). Older
+    # versions reject the field due to ``extra="forbid"``.
+    "purelms-shared>=0.4.0",
 ]
 
 [tool.uv.sources]
@@ -30,10 +36,12 @@ dependencies = [
 purelms-shared = { path = "../purelms-shared", editable = true }
 
 [tool.uv.workspace]
-# Each backend is its own workspace member with its own
-# pyproject.toml at <slug>/backend/. New backends get added here.
+# Each InteractiveTask's backend/ is its own workspace member with
+# its own pyproject.toml at <slug>/backend/. New InteractiveTasks get
+# added here.
 members = [
     "echo/backend",
+    "energyplus_single_zone/backend",
 ]
 
 [project.optional-dependencies]
@@ -48,8 +56,15 @@ dev = [
 [tool.pytest.ini_options]
 minversion = "8.0"
 addopts = "-ra --strict-markers"
-# Run tests from the workspace root; each member's tests/ dir is
-# auto-discovered.
+# Workspace-root pytest scope is intentionally narrow — just the
+# canonical reference InteractiveTask (echo). Why not multiple
+# backends here: each backend's ``tests/`` directory uses the same
+# file names (``test_main.py``, ``test_runner.py``) and pytest's
+# top-level collection doesn't scope module names per-directory
+# without conftest.py setup. The right "run everything" entrypoint
+# is ``just test-all``, which cd's into each backend separately so
+# each backend's own ``pyproject.toml`` (with ``testpaths=["tests"]``)
+# is the config root.
 testpaths = [
     "echo/backend/tests",
 ]
@@ -78,6 +93,11 @@ ignore = [
     "TC001",
     "TC003",
     "RUF002",
+    # × (multiplication sign) is correct scientific notation in
+    # building-energy docstrings (U × A × ΔT, etc.). Same rationale
+    # as RUF002 for em-dash — the audience is humans reading
+    # comments, not parsers.
+    "RUF001",
 ]
 
 [tool.ruff.lint.per-file-ignores]

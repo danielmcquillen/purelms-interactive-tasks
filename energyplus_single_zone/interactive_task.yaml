@@ -1,0 +1,151 @@
+# EnergyPlus single-zone InteractiveTask — the first real domain backend.
+#
+# v1 is intentionally STUBBED: the container ships with an analytical
+# steady-state thermal model rather than a real EnergyPlus binary,
+# because:
+#
+#   1. Real EnergyPlus is a ~500 MB dependency that we'd rather not
+#      pull into every contributor's local dev loop.
+#   2. The stubbed model produces physically plausible numbers
+#      (U-value increases → heat loss increases; cold climate → more
+#      heating energy) so the learner experience is meaningful.
+#   3. The runner is isolated to ``backend/runner.py`` — swapping in
+#      real EnergyPlus when we ship Slice 4+ is a one-file change.
+#
+# When the real-EnergyPlus version ships, bump ``version`` to 0.2.0
+# and re-install with ``--replace-active`` (per ADR-0014's
+# single-active-version invariant).
+
+schema_version: "purelms.interactive_task.v1"
+
+slug: energyplus_single_zone
+name: EnergyPlus Single-Zone
+version: 0.1.0
+description: |
+  Single-zone building-energy InteractiveTask. The learner picks a
+  glazing U-value, window area, and climate zone; the backend
+  computes annual heating + cooling energy and peak heating load
+  through the window.
+
+  v1 ships an analytical steady-state thermal model in lieu of a
+  real EnergyPlus binary, so contributors can iterate without a
+  500 MB simulation dependency. The model captures the dominant
+  effects (lower U → less heat loss, colder climate → more heating)
+  so the learner experience is qualitatively correct.
+
+backend:
+  # Image name derives from slug by ``s/_/-/g`` →
+  # ``purelms-itask-energyplus-single-zone:0.1.0`` (per ADR-0014).
+  # Local builds via ``just build energyplus_single_zone`` tag with
+  # ``:dev``; production deploys push to a registry with the
+  # version tag.
+  image: purelms-itask-energyplus-single-zone:dev
+  credit_cost: 1
+  trust_tier: platform
+  execution_mode: sync
+  default_timeout_seconds: 30
+
+frontend:
+  # Built via ``just frontend-build energyplus_single_zone`` to
+  # ``frontend/dist/energyplus_single_zone.js``. Phase C.2 lands
+  # the Angular bundle that mounts this filename.
+  bundle: energyplus_single_zone.js
+
+# Layer 1 parameter schema. Course authors tighten or hide
+# individual parameters at Layer 2 on the InteractiveTaskBlock.
+parameters:
+  - name: glazing_u_value
+    type: number
+    label: Glazing U-value
+    description: |
+      Heat transfer coefficient of the window assembly. Lower is
+      better-insulating. Typical residential values: 0.7-1.4
+      (triple-pane low-e), 1.6-2.5 (double-pane), 5-6 (single-pane).
+    unit: "W/m²K"
+    min: 0.5
+    max: 6.0
+    step: 0.1
+    default: 2.5
+    required: true
+
+  - name: window_area
+    type: number
+    label: Window area
+    description: |
+      Total glazing area in the zone. Larger windows mean more
+      daylight + view but more heat loss.
+    unit: "m²"
+    min: 1.0
+    max: 20.0
+    step: 0.5
+    default: 5.0
+    required: true
+
+  - name: climate_zone
+    type: enum
+    label: Climate zone
+    description: |
+      ASHRAE climate zone (humid subset). Drives heating + cooling
+      degree-day totals + design heating temperature differential.
+    choices:
+      - {value: "4A", label: "4A Mixed-humid (e.g. New York City)"}
+      - {value: "5A", label: "5A Cool-humid (e.g. Chicago)"}
+      - {value: "6A", label: "6A Cold-humid (e.g. Minneapolis)"}
+    default: "5A"
+    required: true
+
+# Layer 1 output schema. The container's ``output.json``
+# MUST carry keys matching these names exactly — the LMS uses the
+# manifest to look up labels / units / display hints when rendering
+# results to the learner.
+outputs:
+  - name: annual_heating_kWh
+    type: number
+    label: Annual heating energy
+    description: |
+      Total heat loss through the window over the heating season.
+      Computed from U × A × heating-degree-days × 24h/day.
+    unit: kWh
+    display_hint: value-card
+
+  - name: annual_cooling_kWh
+    type: number
+    label: Annual cooling energy
+    description: |
+      Total heat gain through the window during the cooling season.
+      Smaller term in cold climates; significant in warm-humid.
+    unit: kWh
+    display_hint: value-card
+
+  - name: peak_heating_kW
+    type: number
+    label: Peak heating load
+    description: |
+      Heat loss rate through the window at the climate zone's
+      design-day temperature differential.
+    unit: kW
+    display_hint: value-card
+
+  - name: notes
+    type: string
+    label: Notes
+    description: Human-readable summary of the simulation result.
+    display_hint: alert
+
+# Standard envelope context fields this backend reads. The stubbed
+# v1 actually only uses ``run_id`` for log correlation, but we
+# declare the full identification triple so a future
+# real-EnergyPlus version that wants to log "who ran what when"
+# already has the declaration in place.
+lms_context_used:
+  - run_id
+  - backend_slug
+  - backend_version
+
+requires_user_context: false
+
+# v1: empty — falls back to MVP-A semantic (status == SUCCESS → passed).
+# A course author wanting to require e.g. "annual_heating_kWh <= 1500"
+# can wire it up at Layer 2 on the InteractiveTaskBlock until the
+# v2 LMS-side outcome evaluator lands.
+lms_outcomes: {}

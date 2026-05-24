@@ -39,6 +39,10 @@ interface RunStatusResponse {
   is_terminal: boolean;
   completed_at: string | null;
   runtime_seconds: number | null;
+  // Populated by the LMS from the parsed output envelope on
+  // terminal SUCCESS. Empty `{}` / `[]` for in-flight runs.
+  outputs: Record<string, unknown>;
+  messages: Array<{ level: string; code: string; text: string }>;
 }
 
 interface ApiError extends Error {

@@ -1,0 +1,62 @@
+# Pre-commit hooks for purelms-interactive-tasks.
+#
+# Mirrors purelms-shared's lean config rather than purelms's
+# Django-heavy one: this repo is MIT, has no Django templates, no
+# Django migrations, and ships its frontends as plain TypeScript
+# bundles. Hooks here are the style + safety nets that match the
+# wider PureLMS house style so contributors moving between repos
+# don't context-switch.
+#
+# Coverage:
+#   - Python (per-InteractiveTask backend/) — ruff lint + format,
+#     applied workspace-wide via the root pyproject.toml's ruff
+#     config. Each backend's pyproject.toml inherits the workspace
+#     ruff rules; pre-commit runs ruff once from the repo root and
+#     covers all members.
+#   - YAML manifests (interactive_task.yaml at every <slug>/) —
+#     check-yaml validates syntax. The v1 schema check itself is
+#     install-time work in the LMS (see install_interactive_task);
+#     pre-commit catches typos before the schema check ever runs.
+#   - TOML (workspace + per-backend pyprojects) — check-toml.
+#   - Generic hygiene — trailing whitespace, EOF, large files,
+#     case conflicts, debug statements, private keys.
+#
+# TypeScript bundles in <slug>/frontend/ are NOT linted by
+# pre-commit. They have their own per-frontend npm-run-typecheck
+# + vitest run via `just test <slug>`; adding eslint/prettier to
+# pre-commit would force a node toolchain on contributors who only
+# touch Python. If TypeScript drift becomes a real problem, revisit.
+#
+# Operator note: pre-commit only sees TRACKED files. After adding
+# new files, run `git add -N .` first so they're visible to the
+# hooks. This is a documented Slice 3c.5 lesson — pre-commit's
+# `--all-files` mode operates on `git ls-files` output.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: check-docstring-first
+      - id: check-merge-conflict
+      - id: debug-statements
+      - id: detect-private-key
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.13
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+ci:
+  autoupdate_schedule: monthly
+  skip: []
+  submodules: false

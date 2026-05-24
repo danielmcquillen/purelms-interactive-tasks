@@ -1,0 +1,63 @@
+# InteractiveTask manifest for the echo smoke fixture.
+#
+# Echo is the LMS-side integration-test InteractiveTask: it reads
+# whatever parameters the learner submits and echoes them back as
+# outputs. The point is to exercise the dispatcher → submit → run →
+# poll → outputs round-trip without any real domain compute.
+#
+# Per ADR-0014, every InteractiveTask carries an interactive_task.yaml.
+# Echo's manifest is intentionally minimal — it accepts arbitrary
+# parameters and produces them as outputs verbatim, so the parameter
+# and output schemas are open-ended at the manifest level. Real
+# InteractiveTasks (EnergyPlus, FMU, ...) declare concrete shapes.
+
+schema_version: "purelms.interactive_task.v1"
+
+slug: echo
+name: Echo
+version: 0.1.0
+description: |
+  Permanent LMS-side integration-test fixture. Reads whatever
+  parameters the learner submits and echoes them back as outputs.
+  Exercises the full dispatcher → submit → run → poll → outputs
+  pipeline without any real domain compute. Do not remove.
+
+backend:
+  # Image name derives from the slug by s/_/-/g (echo has no
+  # underscores, so the derivation is a no-op). Built locally via
+  # `just build echo`; production deploys push to a registry and
+  # update this URI to the registry-qualified form.
+  image: purelms-itask-echo:dev
+  credit_cost: 1
+  trust_tier: platform
+  execution_mode: sync
+  default_timeout_seconds: 30
+
+frontend:
+  # Built via `just frontend-build echo` to echo/frontend/dist/echo.js.
+  # PureLMS's install_interactive_task command stages this into the
+  # LMS's static dir at purelms/static/backends/echo/echo.js.
+  bundle: echo.js
+
+# Echo accepts arbitrary parameters — no fixed schema. Real
+# InteractiveTasks declare concrete parameter shapes here. See
+# energyplus_single_zone/interactive_task.yaml (Slice 3d C.3) for
+# a worked example with min/max/choices/default.
+parameters: []
+
+# Same story for outputs — echo emits whatever the learner submitted.
+outputs: []
+
+# Standard envelope context fields the echo container reads. Echo is
+# pure: it doesn't actually depend on identity or routing context,
+# but documents the full v1 envelope surface for reference.
+lms_context_used:
+  - run_id
+  - backend_slug
+  - backend_version
+
+# v1: declarative only. Echo is a fixture, not an outcome-bearing
+# task. Falls back to MVP-A semantic: status == SUCCESS → passed.
+requires_user_context: false
+
+lms_outcomes: {}

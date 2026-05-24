@@ -1,14 +1,14 @@
 [project]
-name = "purelms-backends-echo"
+name = "purelms-itask-echo"
 version = "0.1.0"
-description = "Stub echo backend — permanent integration-test fixture for the PureLMS execution path"
+description = "Stub echo InteractiveTask backend — permanent integration-test fixture for the PureLMS execution path (per ADR-0014)"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [
     { name = "Daniel McQuillen", email = "daniel@mcquilleninteractive.com" },
 ]
 dependencies = [
-    "purelms-shared>=0.2.0",
+    "purelms-shared>=0.4.0",
 ]
 
 [project.optional-dependencies]

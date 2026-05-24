@@ -1,0 +1,24 @@
+{
+  "name": "@purelms-interactive-tasks/energyplus-single-zone-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "EnergyPlus single-zone InteractiveTask frontend — parameter sliders + Three.js 3D zone visualization + result cards (per ADR-0014).",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/energyplus_single_zone.ts --bundle --minify --sourcemap --format=esm --outfile=dist/energyplus_single_zone.js",
+    "watch": "esbuild src/energyplus_single_zone.ts --bundle --sourcemap --format=esm --outfile=dist/energyplus_single_zone.js --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "three": "^0.171.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.171.0",
+    "esbuild": "^0.25.3",
+    "happy-dom": "^15.11.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}

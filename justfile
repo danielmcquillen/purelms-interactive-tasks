@@ -1,8 +1,15 @@
-# purelms-backends recipes
+# purelms-interactive-tasks recipes
 #
-# Each backend has a Docker image build + a TypeScript bundle build.
-# Recipes operate per-slug (e.g. `just build echo`) or across all
-# slugs (`just build-all`).
+# Each InteractiveTask has a Docker image build + an ES module bundle
+# build. Recipes operate per-slug (e.g. `just build echo`) or across
+# all slugs (`just build-all`).
+#
+# Naming convention (per ADR-0014):
+#   - Slug stays snake_case at the directory level (e.g. echo,
+#     energyplus_single_zone)
+#   - Docker image name derives a hyphenated alias at the boundary
+#     (purelms-itask-<slug-with-hyphens>:<version>)
+#   - The s/_/-/g conversion is done once, here in the justfile.
 
 default:
     @just --list
@@ -25,51 +32,58 @@ _stage-shared-wheel slug shared_path=env_var_or_default("PURELMS_SHARED_PATH", "
     @mkdir -p "{{slug}}/backend/_vendor"
     cd "{{shared_path}}" && uv build --wheel --out-dir "{{justfile_directory()}}/{{slug}}/backend/_vendor"
 
-# Build the container image for one backend.
+# Build the container image for one InteractiveTask.
+# Image name derives from slug by s/_/-/g (per ADR-0014).
 # Usage: just build echo
+# Usage: just build energyplus_single_zone
 build slug: (_stage-shared-wheel slug)
-    docker build -t purelms-backends-{{slug}}:dev {{slug}}/backend
+    docker build -t purelms-itask-$(echo "{{slug}}" | tr '_' '-'):dev {{slug}}/backend
 
-# Build all backends' container images.
+# Build all InteractiveTasks' container images.
 build-all:
     just build echo
+    just build energyplus_single_zone
 
-# Push one backend's image to the configured registry.
+# Push one InteractiveTask's image to the configured registry.
 # Requires DOCKER_IMAGE_REGISTRY env var, e.g.:
 #   DOCKER_IMAGE_REGISTRY=us-central1-docker.pkg.dev/<proj>/purelms
 push slug registry=env_var_or_default("DOCKER_IMAGE_REGISTRY", ""):
     @test -n "{{registry}}" || (echo "DOCKER_IMAGE_REGISTRY not set" && exit 1)
-    docker tag purelms-backends-{{slug}}:dev {{registry}}/purelms-backends-{{slug}}:latest
-    docker push {{registry}}/purelms-backends-{{slug}}:latest
+    docker tag purelms-itask-$(echo "{{slug}}" | tr '_' '-'):dev {{registry}}/purelms-itask-$(echo "{{slug}}" | tr '_' '-'):latest
+    docker push {{registry}}/purelms-itask-$(echo "{{slug}}" | tr '_' '-'):latest
 
 # ---------------------------------------------------------------------
 # Frontend bundle builds
 # ---------------------------------------------------------------------
 
-# Build the TS bundle for one backend.
+# Build the ES module bundle for one InteractiveTask.
 # Output: <slug>/frontend/dist/<slug>.js
-# Operators copy this to PureLMS's static dir; convention:
+# Operators copy this to PureLMS's static dir via the LMS's
+# `manage.py install_interactive_task` (or `collect_backend_bundles`
+# for ad-hoc staging). Convention:
 #   purelms/static/backends/<slug>/<slug>.js
 frontend-build slug:
     cd {{slug}}/frontend && pnpm run build
 
-# Build all backend frontends.
+# Build all InteractiveTask frontends.
 frontend-build-all:
     just frontend-build echo
+    just frontend-build energyplus_single_zone
 
 # ---------------------------------------------------------------------
 # Testing
 # ---------------------------------------------------------------------
 
-# Run tests for one backend (Python + TypeScript).
+# Run tests for one InteractiveTask (Python + TypeScript).
 test slug:
     cd {{slug}}/backend && uv run pytest
     cd {{slug}}/frontend && pnpm test
 
-# Run tests across all backends + the workspace lint.
+# Run tests across all InteractiveTasks + the workspace lint.
 test-all:
     uv run pytest
     just test echo
+    just test energyplus_single_zone
 
 # Lint + format the whole workspace.
 lint:

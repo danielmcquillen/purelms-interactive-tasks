@@ -1,75 +1,93 @@
-# Contributing to purelms-backends
+# Contributing to purelms-interactive-tasks
 
-Thanks for adding a backend. This doc covers the practical mechanics; the design rationale lives in [PureLMS's architecture refs](https://github.com/danielmcquillen/purelms-project/blob/main/docs/architecture/interactive-task-architecture.md).
+Thanks for adding an InteractiveTask. This doc covers the practical mechanics; the framework's authoritative spec lives in [ADR-0014](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0014-interactive-task-framework.md), and the deep author-facing how-to reference is [`BACKEND_AUTHORING_GUIDE.md`](BACKEND_AUTHORING_GUIDE.md) (read order: README → CONTRIBUTING → BACKEND_AUTHORING_GUIDE).
+
+## What you're building
+
+An **InteractiveTask** is a paired unit: a backend Docker container + a frontend ES module bundle + a manifest that ties them together. PureLMS launches the container at submission time and mounts the bundle into the learner's browser when they view the unit.
+
+The unit of configuration is the **`InteractiveTaskBlock`** row in PureLMS — that's where a course author writes the Layer 2 config (visibility, defaults, restricted bounds) for a specific configured exercise. Same InteractiveTask, different `InteractiveTaskBlock` rows → different configured exercises.
 
 ## Repo structure
 
 ```
-purelms-backends/
-├── <your-slug>/
-│   ├── backend/            # Python container
+purelms-interactive-tasks/
+├── <your_slug>/
+│   ├── interactive_task.yaml   # the manifest — Layer 1 definition
+│   ├── backend/                # Python container
 │   │   ├── Dockerfile
-│   │   ├── pyproject.toml  # workspace member; deps live here
-│   │   ├── __metadata__.py # runtime self-description
-│   │   ├── main.py         # container entrypoint
-│   │   ├── runner.py       # domain code
+│   │   ├── pyproject.toml      # workspace member; deps live here
+│   │   ├── __metadata__.py     # runtime self-description
+│   │   ├── main.py             # container entrypoint
+│   │   ├── runner.py           # domain code (optional, if main.py grows)
 │   │   └── tests/
-│   └── frontend/           # TypeScript bundle
+│   └── frontend/               # TypeScript / Angular / React / Vue bundle
 │       ├── package.json
 │       ├── tsconfig.json
-│       ├── src/<slug>.ts   # exports mount(element, config, helpers)
+│       ├── src/<slug>.ts       # exports mount(element, config, helpers)
 │       └── tests/
 ```
 
-The slug naming convention is `<domain>_<scope>` — e.g. `energyplus_single_zone`, `gel_electrophoresis_basic`. Underscores, not hyphens. The slug is what PureLMS's `InteractiveTaskBlock.simulation_backend_slug` references.
+## Slug naming convention
 
-## Adding a backend
+**`<domain>_<scope>` in snake_case** — e.g. `energyplus_single_zone`, `gel_electrophoresis_basic`, `python_grading_pep8`. Underscores, not hyphens. The slug is what PureLMS's `InteractiveTaskBlock.simulation_backend_slug` references.
 
-1. **Create the directory tree.** Use an existing backend (e.g. `echo/`) as a template.
-2. **Add to the workspace.** Add `"your_slug/backend"` to `pyproject.toml`'s `[tool.uv.workspace.members]` array.
-3. **Implement the container** (`backend/main.py`):
+Docker images derive a hyphenated alias at the boundary only: slug `energyplus_single_zone` → image `purelms-itask-energyplus-single-zone:<version>`. The `s/_/-/g` conversion is done once, inside the LMS's `install_interactive_task` command. See [ADR-0014's Docker image naming section](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0014-interactive-task-framework.md#docker-image-naming).
+
+## Adding an InteractiveTask
+
+1. **Copy the template.** `cp -r _template <your_slug>` is the fastest start.
+2. **Fill in `interactive_task.yaml`.** Required: `schema_version: "purelms.interactive_task.v1"`, `slug`, `name`, `version`, `description`, `backend` (image, credit_cost, trust_tier, execution_mode, default_timeout_seconds), `frontend.bundle`. Recommended: `parameters`, `outputs`, `lms_context_used`, `lms_outcomes`. See [ADR-0014's manifest schema section](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0014-interactive-task-framework.md#interactive_taskyaml-v1-schema).
+3. **Add to the workspace.** Append `"<your_slug>/backend"` to `pyproject.toml`'s `[tool.uv.workspace.members]` array.
+4. **Implement the container** (`backend/main.py`):
    - Read input envelope from `$PURELMS_INPUT_DIR/input.json`.
    - Parse it as `purelms_shared.envelopes.SimulationInputEnvelope`.
-   - Do the work.
-   - Write output as `purelms_shared.envelopes.SimulationOutputEnvelope` to `$PURELMS_OUTPUT_DIR/output.json`.
+   - Do the domain work.
+   - Write `purelms_shared.envelopes.SimulationOutputEnvelope` to `$PURELMS_OUTPUT_DIR/output.json`.
    - Exit 0 on success; non-zero on failure (the LMS reads the exit code and the log tail).
-4. **Implement the frontend** (`frontend/src/<slug>.ts`):
-   - Export a `mount(element: HTMLElement, config: object, helpers: PureLMSHelpers): () => void` function.
-   - `helpers` carries the typed API client (submit, poll), HTML-escape util, and the run reference.
-   - Return an optional teardown callback (called when the LMS navigates away).
-5. **Write tests.** Backend: pytest under `backend/tests/`. Frontend: Vitest under `frontend/tests/`.
-6. **Register in PureLMS** (Django admin):
-   - Create a `SimulationBackendRegistration` row with `backend_slug`, `version`, `backend_image_uri` (registry-qualified container image), credit cost, trust tier, resource defaults.
-7. **Build + push the image:**
+5. **Implement the frontend** (`frontend/src/<slug>.ts`):
+   - Export `function mount(element, config, helpers)` (named OR default export — the dispatcher accepts either).
+   - Read the Layer 2 config from `config`. Honor `visible` / `enabled` / `default` / `min` / `max` / `choices` for each parameter.
+   - Submit via `helpers.api.submit(parameters)`. Poll via `helpers.api.pollStatus(runId, options?)` — the async iterator yields run-status snapshots and the terminal snapshot carries the outputs in its `outputs` field. There is no separate `getOutputs` helper.
+6. **Write tests.** Backend: pytest under `backend/tests/`. Frontend: Vitest (or your framework's test runner) under `frontend/tests/`. Both should run without PureLMS — test the envelope-read/write directly in the backend; mock `helpers` in the frontend.
+7. **Build the image and frontend bundle:**
    ```bash
-   just build <slug>
-   just push <slug>
+   just build <your_slug>
+   just frontend-build <your_slug>
    ```
+8. **Install into a PureLMS instance:**
+   ```bash
+   cd path/to/purelms
+   uv run python manage.py install_interactive_task ../purelms-interactive-tasks/<your_slug>
+   ```
+   The install command reads `interactive_task.yaml`, validates the manifest schema, computes a default block-level config for the LMS-side admin form, stages the frontend bundle into `purelms/static/backends/<slug>/`, and creates a `SimulationBackendRegistration` row. See [ADR-0014's installation mechanics section](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0014-interactive-task-framework.md#installation-mechanics-phase-3-spec).
 
 ## Local development loop
 
 The fastest dev loop uses the `DockerComposeExecutionBackend` (set `SIMULATION_EXECUTION_BACKEND=docker_compose` in your local PureLMS settings):
 
 1. `just build <slug>` builds your container locally.
-2. `just frontend-build <slug>` builds the TS bundle to `<slug>/frontend/dist/<slug>.js` and copies it to PureLMS's static dir.
-3. In PureLMS, create a course → unit → InteractiveTaskBlock with `simulation_backend_slug=<your-slug>`.
-4. Submit a run from the learner UI; the LMS launches your container, your TS bundle renders the result.
+2. `just frontend-build <slug>` builds the ES module to `<slug>/frontend/dist/<slug>.js`.
+3. `uv run python manage.py install_interactive_task ../purelms-interactive-tasks/<slug>` registers it on your local LMS (this also stages the bundle via `collect_backend_bundles`).
+4. In PureLMS, create a course → unit → `InteractiveTaskBlock` with `simulation_backend_slug=<your_slug>` via Django admin.
+5. Submit a run from the learner UI; the LMS launches your container, your frontend bundle renders the result.
 
 ## Testing
 
-Per-backend test commands run from the workspace root:
+Per-InteractiveTask test commands run from the workspace root:
 
 ```bash
 just test <slug>           # backend pytest + frontend vitest
-just test                  # all backends
+just test-all              # all InteractiveTasks
 ```
 
 ## Conventions
 
-- **Container size matters.** Aim for < 1GB images. Use multi-stage Dockerfiles. For EnergyPlus-class backends with large dependencies this is aspirational.
-- **No outbound network by default.** PureLMS launches containers with `--network=none` unless `DOCKER_NETWORK_ENABLED=True`. Backends that need to fetch external data (weather files, etc.) need to declare that explicitly.
-- **Idempotent and stateless.** A backend container's only state is the per-run workspace. No shared databases, no external state.
-- **Deterministic outputs** for evidence-bearing credentials. Same input envelope + same image digest → same output envelope. Non-determinism (e.g. wall-clock-seeded RNG) belongs OFF.
+- **Container size matters.** Aim for < 1GB images. Use multi-stage Dockerfiles. For EnergyPlus-class tasks with large dependencies this is aspirational.
+- **No outbound network by default.** PureLMS launches containers with `--network=none` unless explicitly enabled. Backends that need to fetch external data (weather files, etc.) need to declare that explicitly + accept a higher `trust_tier` cost.
+- **Idempotent and stateless.** A container's only state is the per-run workspace. No shared databases, no external state.
+- **Deterministic outputs** for evidence-bearing credentials. Same input envelope + same image digest → same output envelope. Non-determinism (e.g. wall-clock-seeded RNG) belongs OFF unless the manifest declares it.
+- **Honor Layer 2 config in the frontend.** A bundle that ignores `config.parameters.<name>.visible` / `enabled` is a contract violation — the learner-facing form must respect what the course author chose.
 
 ## License
 

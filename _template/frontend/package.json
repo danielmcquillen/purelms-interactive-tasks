@@ -1,0 +1,20 @@
+{
+  "name": "@purelms-interactive-tasks/TODO-your-slug-here-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TODO: one-sentence description of your InteractiveTask frontend bundle.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/placeholder.ts --bundle --minify --sourcemap --format=esm --outfile=dist/TODO_your_slug_here.js",
+    "watch": "esbuild src/placeholder.ts --bundle --sourcemap --format=esm --outfile=dist/TODO_your_slug_here.js --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.3",
+    "happy-dom": "^15.11.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}

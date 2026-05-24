@@ -1,0 +1,28 @@
+# Minimal pyproject for a new InteractiveTask backend.
+# Replace TODO markers with your slug + author info.
+
+[project]
+name = "purelms-itask-TODO-your-slug-here"
+version = "0.1.0"
+description = "TODO: one-sentence description of your InteractiveTask backend."
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "TODO Your Name", email = "TODO@example.com" },
+]
+dependencies = [
+    "purelms-shared>=0.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<10",
+]
+
+# uv workspace source — points at the sibling purelms-shared repo.
+# If you publish purelms-shared to PyPI, drop this section.
+[tool.uv.sources]
+purelms-shared = { path = "../../../purelms-shared", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

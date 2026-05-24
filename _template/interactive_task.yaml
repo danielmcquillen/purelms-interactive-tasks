@@ -1,0 +1,78 @@
+# Minimal v1 manifest skeleton. Fill in everything marked TODO.
+# Reference: ADR-0014 §interactive_task.yaml v1 schema.
+
+schema_version: "purelms.interactive_task.v1"
+
+# REQUIRED: identity
+slug: TODO_your_slug_here          # snake_case; matches the directory name
+name: TODO Your InteractiveTask name
+version: 0.1.0
+description: |
+  TODO: a paragraph (markdown OK) describing what this InteractiveTask
+  does, who it's for, and what learners get out of it.
+
+# REQUIRED: backend deploy metadata
+backend:
+  # Image URI. If omitted, install_interactive_task derives:
+  #   <--registry>/purelms-itask-<slug-with-hyphens>:<version>
+  # Override here only if you have an unusual registry layout.
+  image: purelms-itask-TODO-your-slug-here:0.1.0
+  credit_cost: 1                   # credits debited per run (per ADR-0011)
+  trust_tier: community            # platform | verified | community
+  execution_mode: sync             # v1 accepts only "sync"; async is Slice 4
+  default_timeout_seconds: 60
+
+# REQUIRED: frontend deploy metadata
+frontend:
+  bundle: TODO_your_slug_here.js   # filename inside frontend/dist/
+
+# Layer 1: parameters the frontend collects from the learner.
+# v1 types: number | string | boolean | enum.
+parameters:
+  # Example numeric parameter:
+  # - name: glazing_u_value
+  #   type: number
+  #   label: Glazing U-value
+  #   description: Heat-transfer coefficient of the window.
+  #   unit: "W/m²K"
+  #   min: 0.5
+  #   max: 6.0
+  #   step: 0.1
+  #   default: 2.5
+  #   required: true
+  #
+  # Example enum parameter:
+  # - name: climate_zone
+  #   type: enum
+  #   label: Climate zone
+  #   description: ASHRAE climate zone.
+  #   choices:
+  #     - {value: "4A", label: "Mixed-humid"}
+  #     - {value: "5A", label: "Cool-humid"}
+  #     - {value: "6A", label: "Cold-humid"}
+  #   default: "5A"
+  #   required: true
+
+# Layer 1: outputs the backend produces for the frontend to display.
+outputs:
+  # Example numeric output:
+  # - name: annual_heating_kWh
+  #   type: number
+  #   label: Annual heating energy
+  #   description: Total heating energy for the simulation period.
+  #   unit: kWh
+  #   display_hint: value-card
+
+# Which standard envelope context fields this backend reads.
+# Validated at install time against v1's allowed-field set.
+lms_context_used:
+  - run_id
+  - backend_slug
+  - backend_version
+
+# Whether the backend needs learner identity. v1: declarative only.
+requires_user_context: false
+
+# Layer 1: outcome-mapping rules. v1: LMS-side evaluator reads these.
+# Empty falls back to MVP-A semantic (status == SUCCESS → passed).
+lms_outcomes: {}

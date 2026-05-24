@@ -1,0 +1,30 @@
+[project]
+name = "purelms-itask-energyplus-single-zone"
+version = "0.1.0"
+description = "EnergyPlus single-zone InteractiveTask backend — stubbed analytical thermal model (Slice 3d Phase C.1; real EnergyPlus deferred to Slice 4)"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "Daniel McQuillen", email = "daniel@mcquilleninteractive.com" },
+]
+dependencies = [
+    # v1's stubbed thermal model is pure Python — no scientific
+    # dependencies. When real EnergyPlus lands (Slice 4+), this
+    # will pick up ``eppy`` or ``opyplus`` for IDF/EPW handling
+    # plus a vendored EnergyPlus binary in the Dockerfile.
+    "purelms-shared>=0.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<10",
+]
+
+# Local sibling path for dev. Production publication of
+# purelms-shared (planned Phase 5) will drop this and the
+# floor-pin in ``dependencies`` becomes the source of truth.
+[tool.uv.sources]
+purelms-shared = { path = "../../../purelms-shared", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
