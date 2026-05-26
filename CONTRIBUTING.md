@@ -81,6 +81,24 @@ just test <slug>           # backend pytest + frontend vitest
 just test-all              # all InteractiveTasks
 ```
 
+## Pre-commit
+
+This repo uses [pre-commit](https://pre-commit.com/) for style + safety nets (ruff lint + format, YAML + TOML syntax, trailing whitespace, etc.). The config is at [`.pre-commit-config.yaml`](.pre-commit-config.yaml). One-time setup after cloning:
+
+```bash
+uv sync --extra dev          # installs pre-commit alongside ruff + pytest
+uv run pre-commit install    # wires the git hook
+```
+
+After that, `git commit` runs the hooks automatically. To run against the whole repo on demand:
+
+```bash
+git add -N .                              # makes untracked files visible to pre-commit
+uv run pre-commit run --all-files
+```
+
+**Gotcha:** pre-commit only sees TRACKED files. The `git add -N .` step is the intent-to-add trick that lists new files without staging their content — it's the documented PureLMS-house workflow. Without it, hooks silently skip new files (a documented Slice 3c.5 lesson).
+
 ## Conventions
 
 - **Container size matters.** Aim for < 1GB images. Use multi-stage Dockerfiles. For EnergyPlus-class tasks with large dependencies this is aspirational.
