@@ -14,10 +14,16 @@
 # per-run from object storage; we bake one representative EPW per climate
 # zone into the image since the learner only picks a zone, not a file).
 
+# This image is pinned to linux/amd64. EnergyPlus ships an x86_64 Linux
+# binary only (no arm64 Linux build), so the bundled binary dictates the
+# image arch. amd64 also matches the Cloud Run Jobs runtime. On an Apple
+# Silicon / arm64 host the image builds + runs under emulation (a
+# single-zone annual run is still only seconds).
+
 # =============================================================================
 # Stage 1: fetch EnergyPlus + the bundled EPW weather files
 # =============================================================================
-FROM ubuntu:22.04 AS eplus-builder
+FROM --platform=linux/amd64 ubuntu:22.04 AS eplus-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates wget \
@@ -50,7 +56,7 @@ RUN mkdir -p /opt/weather \
 # =============================================================================
 # Stage 2: runtime container
 # =============================================================================
-FROM python:3.13-slim
+FROM --platform=linux/amd64 python:3.13-slim
 
 # EnergyPlus runtime libs: libgomp1 (OpenMP), libx11-6 + libxext6 (the
 # binary links X11 even headless). sudo is intentionally absent.

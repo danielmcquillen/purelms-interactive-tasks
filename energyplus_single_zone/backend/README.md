@@ -63,22 +63,31 @@ available in the authoring environment, so the pieces split into
 - `parse_err_file` severity tagging + multi-line continuation.
 - `_select_mode` dispatch + the analytical model's physics.
 
-**⚠️ NOT verified here — confirm with a real `just build` + container run:**
+**✅ Build-validated end-to-end (2026-05-29, EnergyPlus 25.2):** built the
+image and ran the container against a real envelope (`just build` +
+`docker run` with input/output mounts). The IDF runs clean (no
+Severe/Fatal), the EPW URLs resolve, the image assembles, and the End
+Uses + peak-rate extraction returns sane, monotonic numbers — e.g. for a
+5 m² U=2.5 window in 5A: ~3,000 kWh/yr heating; lowering U to 1.0 drops
+heating ~15%, growing the window to 20 m² raises heating ~55% and cooling
+~240% (solar gain), and 6A is colder than 5A. Two issues the validation
+surfaced and fixed:
 
-- That the **IDF template** is accepted by EnergyPlus 25.2 (object set,
-  field order, surface vertex winding) and produces physically sane
-  numbers. A vertex-winding or field-order error surfaces as a Severe/Fatal
-  in `eplusout.err`.
-- That the **EPW download URLs** in the `Dockerfile` resolve (the DOE
-  weather set moves; a 404 means re-source the TMY3 file).
-- That the **End Uses row/column names** match what an IdealLoads single
-  zone actually writes (district heating/cooling labels vary by version).
-- The end-to-end **image build** (binary fetch + assembly).
+1. **Image must be `linux/amd64`** — the NREL EnergyPlus binary is x86_64
+   only, so the Dockerfile pins both stages to `--platform=linux/amd64`
+   (also matches Cloud Run). On Apple Silicon it builds + runs under
+   emulation (~4 s/run).
+2. **`OutputControl:Table:Style` unit conversion** — the report stores
+   energy in the unit named by that field; it's set to `None`
+   (report-native GJ) so `_sum_end_use_row`'s `Units = 'GJ'` filter +
+   GJ→kWh conversion match. (`JtoKWH` would store kWh and silently
+   return 0.)
 
-When validating: `just build energyplus_single_zone`, then run the
-container against a hand-written `input.json` and inspect `output.json`
-+ `eplusout.err`. The analytical fallback covers everything in the
-meantime, so the task is never broken for local dev.
+The fast unit suite (above) still covers everything binary-free, so the
+analytical fallback keeps local dev / CI working without the ~500 MB
+dependency. To re-validate after an IDF or version change: `just build
+energyplus_single_zone`, run the container against a hand-written
+`input.json`, and inspect `output.json` + `eplusout.err`.
 
 ---
 

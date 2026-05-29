@@ -74,12 +74,19 @@ RunPeriod,
 !- Materials + constructions
 !- ----------------------------------------------------------------
 
+!- Well-insulated opaque envelope (U ≈ 0.2 W/m²K: thickness 0.2 m /
+!- conductivity 0.04 W/m-K ≈ rigid foam). This is deliberate pedagogy:
+!- with a low-loss opaque shell, the 5 m² window dominates the heat-loss
+!- path, so the learner's glazing U-value + window-area choices visibly
+!- drive annual heating. A lossy shell (the EnergyPlus default-ish 0.5
+!- conductivity) would swamp the window's contribution and flatten the
+!- educational signal.
 Material,
     OpaqueWall,              !- Name
     MediumRough,             !- Roughness
     0.20,                    !- Thickness {m}
-    0.50,                    !- Conductivity {W/m-K}
-    800,                     !- Density {kg/m3}
+    0.04,                    !- Conductivity {W/m-K}
+    32,                      !- Density {kg/m3}
     900;                     !- Specific Heat {J/kg-K}
 
 Construction,
@@ -347,7 +354,7 @@ Output:Table:SummaryReports,
 
 OutputControl:Table:Style,
     CommaAndHTML,            !- Column Separator
-    JtoKWH;                  !- Unit Conversion
+    None;                    !- Unit Conversion (None = report-native GJ; runner._sum_end_use_row reads GJ and converts to kWh, matching the Validibot-proven query + the GJ test fixture)
 
 !- The peak heating load: the runner takes the MAX of this over the
 !- annual run (the coldest design hour) and converts W → kW.
