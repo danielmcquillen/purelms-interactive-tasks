@@ -20,11 +20,9 @@ dev = [
     "pytest>=8.0,<10",
 ]
 
-# Local sibling path for dev. Production publication of
-# purelms-shared (planned Phase 5) will drop this and the
-# floor-pin in ``dependencies`` becomes the source of truth.
-[tool.uv.sources]
-purelms-shared = { path = "../../../purelms-shared", editable = true }
+# purelms-shared is published to PyPI; the ``>=0.4.0`` floor-pin in
+# ``dependencies`` above is the source of truth (audit P0-2 closed —
+# the editable sibling-path override is gone).
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

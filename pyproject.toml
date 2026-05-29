@@ -30,10 +30,10 @@ dependencies = [
     "purelms-shared>=0.4.0",
 ]
 
-[tool.uv.sources]
-# Local sibling path for dev. Production-published backends will
-# pull from PyPI once purelms-shared is published.
-purelms-shared = { path = "../purelms-shared", editable = true }
+# purelms-shared is now a published PyPI package — the ``>=0.4.0``
+# floor pin in ``dependencies`` (and in each backend member) is the
+# source of truth. The editable sibling-path override that lived here
+# is gone (audit P0-2 closed; matches validibot-shared's model).
 
 [tool.uv.workspace]
 # Each InteractiveTask's backend/ is its own workspace member with
