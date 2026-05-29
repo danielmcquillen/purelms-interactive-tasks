@@ -154,7 +154,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0,<5" },
-    { name = "purelms-shared", editable = "../purelms-shared" },
+    { name = "purelms-shared", specifier = ">=0.4.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0,<10" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15,<1" },
 ]
@@ -175,14 +175,14 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "purelms-shared", editable = "../purelms-shared" },
+    { name = "purelms-shared", specifier = ">=0.4.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0,<10" },
 ]
 provides-extras = ["dev"]
 
 [[package]]
 name = "purelms-itask-energyplus-single-zone"
-version = "0.1.0"
+version = "0.2.0"
 source = { virtual = "energyplus_single_zone/backend" }
 dependencies = [
     { name = "purelms-shared" },
@@ -195,7 +195,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "purelms-shared", editable = "../purelms-shared" },
+    { name = "purelms-shared", specifier = ">=0.4.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0,<10" },
 ]
 provides-extras = ["dev"]
@@ -203,19 +203,14 @@ provides-extras = ["dev"]
 [[package]]
 name = "purelms-shared"
 version = "0.4.0"
-source = { editable = "../purelms-shared" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0,<5" },
-    { name = "pydantic", specifier = ">=2.6,<3" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0,<10" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15,<1" },
+sdist = { url = "https://files.pythonhosted.org/packages/1f/7f/9346e766c1ffe24a35a527c65c70cd4f0150a5b7cb6be381cc954dbf3c77/purelms_shared-0.4.0.tar.gz", hash = "sha256:cfbb6deb31272e563f3f07b28c98f2415f575fbabd52a8914844f5d5736c6f2c", size = 29172, upload-time = "2026-05-28T23:56:33.116Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1f/b6/29d6b5577f4177eeceb8bd12ac956a6a478d8d18a389617d144a170b62da/purelms_shared-0.4.0-py3-none-any.whl", hash = "sha256:878be9e83d5b25eff01938ab7d1c2566c0581346c24c49a10570bf814121425f", size = 22426, upload-time = "2026-05-28T23:56:32.043Z" },
 ]
-provides-extras = ["dev"]
 
 [[package]]
 name = "pydantic"

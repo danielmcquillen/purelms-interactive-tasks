@@ -1,41 +1,41 @@
 # EnergyPlus single-zone InteractiveTask — the first real domain backend.
 #
-# v1 is intentionally STUBBED: the container ships with an analytical
-# steady-state thermal model rather than a real EnergyPlus binary,
-# because:
+# v0.2 runs a REAL EnergyPlus simulation. The backend builds a single-zone
+# IDF from the learner's parameters (WindowMaterial:SimpleGlazingSystem
+# takes the U-value directly; the window length is derived from the area),
+# runs the bundled EnergyPlus binary against a per-zone TMY weather file,
+# and mines eplusout.sql for the outputs.
 #
-#   1. Real EnergyPlus is a ~500 MB dependency that we'd rather not
-#      pull into every contributor's local dev loop.
-#   2. The stubbed model produces physically plausible numbers
-#      (U-value increases → heat loss increases; cold climate → more
-#      heating energy) so the learner experience is meaningful.
-#   3. The runner is isolated to ``backend/runner.py`` — swapping in
-#      real EnergyPlus when we ship Slice 4+ is a one-file change.
+# A pure-Python analytical steady-state model remains as the binary-free
+# fallback (set PURELMS_EPLUS_MODE=analytical, or just run outside the
+# container where the binary is absent) so contributors + CI + the local
+# echo-demo can iterate without the ~500 MB EnergyPlus dependency. Both
+# paths return identical output keys; the ``notes`` string says which ran.
 #
-# When the real-EnergyPlus version ships, bump ``version`` to 0.2.0
-# and re-install with ``--replace-active`` (per ADR-0014's
-# single-active-version invariant).
+# Bumped 0.1.0 → 0.2.0 for the real-EnergyPlus contract change; re-install
+# with ``--replace-active`` (ADR-0014 single-active-version invariant).
 
 schema_version: "purelms.interactive_task.v1"
 
 slug: energyplus_single_zone
 name: EnergyPlus Single-Zone
-version: 0.1.0
+version: 0.2.0
 description: |
   Single-zone building-energy InteractiveTask. The learner picks a
   glazing U-value, window area, and climate zone; the backend
   computes annual heating + cooling energy and peak heating load
   through the window.
 
-  v1 ships an analytical steady-state thermal model in lieu of a
-  real EnergyPlus binary, so contributors can iterate without a
-  500 MB simulation dependency. The model captures the dominant
-  effects (lower U → less heat loss, colder climate → more heating)
-  so the learner experience is qualitatively correct.
+  v0.2 runs a real EnergyPlus simulation (single-zone IDF generated
+  from the parameters, run against a bundled TMY weather file per
+  climate zone). A pure-Python analytical model is the binary-free
+  fallback for dev/CI, capturing the dominant effects (lower U → less
+  heat loss, colder climate → more heating) so the experience is
+  meaningful even without the EnergyPlus binary.
 
 backend:
   # Image name derives from slug by ``s/_/-/g`` →
-  # ``purelms-itask-energyplus-single-zone:0.1.0`` (per ADR-0014).
+  # ``purelms-itask-energyplus-single-zone:0.2.0`` (per ADR-0014).
   # Local builds via ``just build energyplus_single_zone`` tag with
   # ``:dev``; production deploys push to a registry with the
   # version tag.

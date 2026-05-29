@@ -67,6 +67,11 @@ def workspace(tmp_path, monkeypatch):
     monkeypatch.setenv("PURELMS_INPUT_DIR", str(input_dir))
     monkeypatch.setenv("PURELMS_OUTPUT_DIR", str(output_dir))
     monkeypatch.setenv("PURELMS_RUN_ID", "test-run-id")
+    # Force the binary-free analytical model so these contract tests are
+    # deterministic regardless of whether the dev's machine happens to
+    # have an ``energyplus`` binary on PATH (auto mode would otherwise
+    # try the real path, which needs bundled weather files).
+    monkeypatch.setenv("PURELMS_EPLUS_MODE", "analytical")
     return input_dir, output_dir
 
 

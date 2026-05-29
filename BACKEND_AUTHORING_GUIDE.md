@@ -273,28 +273,32 @@ The v1 allowed set is exactly these seven fields (matches `purelms_shared.envelo
 
 ### `lms_outcomes` — outcome-mapping rules
 
-This is the *eventual* declarative interface that will let course authors say "passing = `annual_heating_kWh <= 10000` AND `comfort_hours >= 8000`" without your container caring about pass/fail semantics.
+This is the declarative interface that lets course authors say "passing = `annual_heating_kWh < 10000`" without your container caring about pass/fail semantics — the LMS computes the grade from your outputs.
 
-**v1 status: declarative only — runtime evaluator NOT shipped.** Be honest with yourself about what this means today:
+**Status: shipped (Slice 3e, 2026-05-29).** Both halves now work:
 
-- ✅ **At install time**, the installer accepts the `lms_outcomes` block and validates that every `outputs.NAME` referenced by a rule corresponds to a declared output in your manifest. Dangling references fail the install. (Caught at install time, not at the first failed learner submission.)
-- ❌ **At completion time**, the LMS does NOT yet evaluate the rules. `_on_run_succeeded` unconditionally sets `grade_status=PASSED` on any `status == SUCCESS` envelope — the **MVP-A** semantic ("ran successfully = passed"). The runtime rule evaluator is tracked as Slice 3e / 4 work; see [ADR-0014 §Implementation status](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0014-interactive-task-framework.md#implementation-status-by-section-v1--slice-3d-delivery).
+- ✅ **At install time**, the installer validates that every `outputs.NAME` referenced by a rule corresponds to a declared output in your manifest. Dangling references fail the install.
+- ✅ **At completion time**, `_on_run_succeeded` evaluates the rules against your backend's `outputs` and writes the standardized `(passed, score, completion)` triple onto the learner's `InteractiveTaskAttempt`. A `passed` rule that fails records `grade_status=FAILED` even on a `SUCCESS` envelope.
 
-**Practical guidance for v1 authors:** ship `lms_outcomes: {}` until the evaluator lands. Don't author rules that you expect to be enforced — they'll validate at install but won't affect completion semantics. If your task needs pass/fail logic in v1, build it into the backend: emit `OutputStatus.FAILED_SIMULATION` (note: credit NOT refunded — the learner used the compute) instead of `OutputStatus.SUCCESS` when the simulation result is below threshold.
+**If you omit `lms_outcomes` (or set it to `{}`), you get the MVP-A fallback:** `status == SUCCESS → passed = true, completion = 1.0, score = null`. That's what every shipped manifest does today, so the default is "ran successfully = passed."
 
-Future shape (informational — what the evaluator will accept once it ships):
+Rule shape — each standard outcome field (`passed` / `score` / `completion`) maps to a `{source, transform, ...args}` rule:
 
 ```yaml
 lms_outcomes:
-  passing_rule:
-    all_of:
-      - field: outputs.annual_heating_kWh
-        op: lte
-        value: 10000
-      - field: outputs.comfort_hours
-        op: gte
-        value: 8000
+  passed:
+    source: outputs.annual_heating_kWh
+    transform: less_than
+    threshold: 10000
+  score:
+    source: outputs.annual_heating_kWh
+    transform: normalize_inverse   # lower heating energy → higher score
+    bounds: [2000, 10000]
 ```
+
+Transforms: `passthrough`, `equals` (`value`), `less_than` / `greater_than` (`threshold`), `in_range` (`bounds: [min, max]`) → bool; `normalize` / `normalize_inverse` (`bounds: [min, max]`) → 0.0-1.0 float. A rule referencing a missing output falls back to that field's MVP-A default at runtime (and the install-time check catches the common dangling-reference typo).
+
+(If you still want backend-side pass/fail — e.g. for logic the rule transforms can't express — emit `OutputStatus.FAILED_SIMULATION` from the container; note the credit is NOT refunded on FAILED_SIMULATION, since the learner used the compute.)
 
 ### `requires_user_context`
 
@@ -436,7 +440,7 @@ sys.exit(0)
 
 | Value | When to use |
 |---|---|
-| `SUCCESS` | The run completed and produced meaningful outputs. The LMS sets `grade_status=PASSED` on the learner's `InteractiveTaskAttempt` unconditionally for v1 (MVP-A). When the `lms_outcomes` rule evaluator ships (post-Slice-3d), `SUCCESS` will be re-evaluated against the manifest's rule and may flip to FAILED. |
+| `SUCCESS` | The run completed and produced meaningful outputs. The LMS then evaluates your manifest's `lms_outcomes` rules against the outputs to set `grade_status` (Slice 3e). With `lms_outcomes: {}` (the default), `SUCCESS` maps to `PASSED` (MVP-A). With a `passed` rule, a `SUCCESS` run whose outputs miss the threshold records `FAILED`. |
 | `FAILED_SIMULATION` | The run completed but the simulation said "you got the wrong answer" — credit is kept, learner sees the outputs + messages. |
 | `FAILED_RUNTIME` | The simulation crashed (bad IDF, divergent solver, exception). Credit is **refunded**. |
 | `CANCELLED` | The run was cancelled (operator action or learner-initiated). |
@@ -713,7 +717,7 @@ PureLMS layers configuration at three points:
 
 3. **Layer 3 — Submission** (`SimulationRun.parameters`): the learner's actual values at submission time. *Eventually* validated against L1 ∩ L2 by the LMS before your container sees them.
 
-**v1 validation reality (be honest):** the LMS validates **L1 at install** (manifest schema, parameter types, lms_outcomes references), but **L2 ↔ L1 conformance and L3 ↔ L1 ∩ L2 validation are NOT yet enforced**. A course author can save an `interaction_details` config with bounds outside the manifest's range, and a learner's submitted parameters aren't schema-checked before the MeteringService debit fires. In practice the backend container's own parameter helpers (`_require_float`, etc.) catch bad values and emit `OutputStatus.FAILED_RUNTIME` envelopes (which refund credits per ADR-0011), so the user-facing impact is "brief debit + immediate refund" rather than "silent bad behavior" — but the ADR-spec'd "validate before debit + dispatch" contract is not held today. Implementation tracked for Slice 3e / 4. See [ADR-0014 §Implementation status](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0014-interactive-task-framework.md#implementation-status-by-section-v1--slice-3d-delivery) for the per-row ⚠️ status. **What this means for you as an author:** the safest path is to make your backend's parameter validation comprehensive and to emit clean `FAILED_RUNTIME` envelopes on bad input — those work end-to-end today.
+**Validation (all three layers enforced as of Slice 3e, 2026-05-29):** the LMS validates **L1 at install** (manifest schema, parameter types, lms_outcomes references), **L2 ↔ L1 at block edit/import** (a course author can no longer save an `interaction_details` config that widens past or references parameters outside your manifest — `InteractiveTaskBlock.clean()` + the importer serializer reject it), and **L3 ↔ L1 ∩ L2 at submit, before the credit debit** (`submit_simulation_run` rejects out-of-bounds / wrong-type / bad-enum / unknown / missing-required submissions and rolls back with no charge). One exception: an **open-schema** backend (`parameters: []`, like `echo`) accepts arbitrary parameters by design and skips L2/L3. See [ADR-0014 §Validation](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0014-interactive-task-framework.md). **What this means for you as an author:** declare accurate `min`/`max`/`choices`/`required` in your manifest — those bounds are now enforced end-to-end. Keep your backend's parameter helpers as defense-in-depth (and the FAILED_RUNTIME refund remains the safety net for open-schema tasks), but you no longer have to rely on them as the *only* guard.
 
 Concrete example. Manifest declares:
 

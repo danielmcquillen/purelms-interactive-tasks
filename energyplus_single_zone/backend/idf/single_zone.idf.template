@@ -1,0 +1,364 @@
+!- ===================================================================
+!- EnergyPlus single-zone InteractiveTask — IDF template
+!- ===================================================================
+!-
+!- This is a TEMPLATE: the placeholders below are substituted by
+!- ``runner.build_idf()`` (Python ``string.Template``) before EnergyPlus
+!- runs. The three substituted fields are:
+!-
+!-   GLAZING_U_VALUE  (W/m²K)  learner parameter, mapped straight onto
+!-                             WindowMaterial:SimpleGlazingSystem's
+!-                             U-Factor field (the clean parameter seam).
+!-   WINDOW_LENGTH    (m)      computed by the runner as
+!-                             window_area / WINDOW_HEIGHT.
+!-   WINDOW_HEIGHT    (m)      fixed window height (see runner).
+!-
+!- Weather (the climate zone) is supplied at run time via the bundled
+!- EPW file (``energyplus --weather <zone>.epw``), NOT baked in here —
+!- so this single template serves every climate zone.
+!-
+!- ⚠️ NOT yet validated against an EnergyPlus binary in this repo's CI
+!- (no binary available at authoring time). The object set + field order
+!- follow the EnergyPlus 25.2 Input/Output Reference; verify with a real
+!- ``just build energyplus_single_zone`` + run before trusting outputs.
+!- The analytical fallback (runner._simulate_analytical) covers dev/CI.
+
+Version,
+    25.2;                    !- Version Identifier
+
+SimulationControl,
+    No,                      !- Do Zone Sizing Calculation
+    No,                      !- Do System Sizing Calculation
+    No,                      !- Do Plant Sizing Calculation
+    No,                      !- Run Simulation for Sizing Periods
+    Yes,                     !- Run Simulation for Weather File Run Periods
+    No,                      !- Do HVAC Sizing Simulation for Sizing Periods
+    1;                       !- Maximum Number of HVAC Sizing Simulation Passes
+
+Building,
+    Single Zone Educational, !- Name
+    0,                       !- North Axis {deg}
+    City,                    !- Terrain
+    0.04,                    !- Loads Convergence Tolerance Value {W}
+    0.4,                     !- Temperature Convergence Tolerance Value {deltaC}
+    FullExterior,            !- Solar Distribution
+    25,                      !- Maximum Number of Warmup Days
+    6;                       !- Minimum Number of Warmup Days
+
+Timestep,
+    4;                       !- Number of Timesteps per Hour
+
+GlobalGeometryRules,
+    UpperLeftCorner,         !- Starting Vertex Position
+    Counterclockwise,        !- Vertex Entry Direction
+    World;                   !- Coordinate System
+
+!- Run the full weather-file year. Start/End day fields are blank so
+!- EnergyPlus uses the EPW's period; the run-period name is cosmetic.
+RunPeriod,
+    Annual,                  !- Name
+    1,                       !- Begin Month
+    1,                       !- Begin Day of Month
+    ,                        !- Begin Year
+    12,                      !- End Month
+    31,                      !- End Day of Month
+    ,                        !- End Year
+    ,                        !- Day of Week for Start Day
+    Yes,                     !- Use Weather File Holidays and Special Days
+    Yes,                     !- Use Weather File Daylight Saving Period
+    No,                      !- Apply Weekend Holiday Rule
+    Yes,                     !- Use Weather File Rain Indicators
+    Yes;                     !- Use Weather File Snow Indicators
+
+!- ----------------------------------------------------------------
+!- Materials + constructions
+!- ----------------------------------------------------------------
+
+Material,
+    OpaqueWall,              !- Name
+    MediumRough,             !- Roughness
+    0.20,                    !- Thickness {m}
+    0.50,                    !- Conductivity {W/m-K}
+    800,                     !- Density {kg/m3}
+    900;                     !- Specific Heat {J/kg-K}
+
+Construction,
+    WallConstruction,        !- Name
+    OpaqueWall;              !- Outside Layer
+
+Construction,
+    RoofConstruction,        !- Name
+    OpaqueWall;              !- Outside Layer
+
+Construction,
+    FloorConstruction,       !- Name
+    OpaqueWall;              !- Outside Layer
+
+!- The learner's glazing U-value maps DIRECTLY onto this object's
+!- U-Factor field. SimpleGlazingSystem is the ideal parameter seam:
+!- no layer-by-layer optics needed — one U-Factor, one SHGC.
+WindowMaterial:SimpleGlazingSystem,
+    Glazing,                 !- Name
+    ${GLAZING_U_VALUE},      !- U-Factor {W/m2-K}
+    0.40,                    !- Solar Heat Gain Coefficient
+    0.60;                    !- Visible Transmittance
+
+Construction,
+    WindowConstruction,      !- Name
+    Glazing;                 !- Outside Layer
+
+!- ----------------------------------------------------------------
+!- Zone geometry — a 10 m (x) × 6 m (y) × 3 m (z) box.
+!- The south wall (y=0) hosts the parametric window.
+!- ----------------------------------------------------------------
+
+Zone,
+    EducationalZone,         !- Name
+    0,                       !- Direction of Relative North {deg}
+    0, 0, 0,                 !- X,Y,Z {m}
+    1,                       !- Type
+    1,                       !- Multiplier
+    autocalculate,           !- Ceiling Height {m}
+    autocalculate;           !- Volume {m3}
+
+BuildingSurface:Detailed,
+    Floor,                   !- Name
+    Floor,                   !- Surface Type
+    FloorConstruction,       !- Construction Name
+    EducationalZone,         !- Zone Name
+    ,                        !- Space Name
+    Ground,                  !- Outside Boundary Condition
+    ,                        !- Outside Boundary Condition Object
+    NoSun,                   !- Sun Exposure
+    NoWind,                  !- Wind Exposure
+    ,                        !- View Factor to Ground
+    4,                       !- Number of Vertices
+    0, 0, 0,                 !- X,Y,Z Vertex 1 {m}
+    0, 6, 0,                 !- X,Y,Z Vertex 2 {m}
+    10, 6, 0,                !- X,Y,Z Vertex 3 {m}
+    10, 0, 0;                !- X,Y,Z Vertex 4 {m}
+
+BuildingSurface:Detailed,
+    Roof,                    !- Name
+    Roof,                    !- Surface Type
+    RoofConstruction,        !- Construction Name
+    EducationalZone,         !- Zone Name
+    ,                        !- Space Name
+    Outdoors,                !- Outside Boundary Condition
+    ,                        !- Outside Boundary Condition Object
+    SunExposed,              !- Sun Exposure
+    WindExposed,             !- Wind Exposure
+    ,                        !- View Factor to Ground
+    4,                       !- Number of Vertices
+    0, 6, 3,                 !- X,Y,Z Vertex 1 {m}
+    0, 0, 3,                 !- X,Y,Z Vertex 2 {m}
+    10, 0, 3,                !- X,Y,Z Vertex 3 {m}
+    10, 6, 3;                !- X,Y,Z Vertex 4 {m}
+
+!- South wall (y=0) — hosts the window.
+BuildingSurface:Detailed,
+    SouthWall,               !- Name
+    Wall,                    !- Surface Type
+    WallConstruction,        !- Construction Name
+    EducationalZone,         !- Zone Name
+    ,                        !- Space Name
+    Outdoors,                !- Outside Boundary Condition
+    ,                        !- Outside Boundary Condition Object
+    SunExposed,              !- Sun Exposure
+    WindExposed,             !- Wind Exposure
+    ,                        !- View Factor to Ground
+    4,                       !- Number of Vertices
+    0, 0, 3,                 !- X,Y,Z Vertex 1 {m}
+    0, 0, 0,                 !- X,Y,Z Vertex 2 {m}
+    10, 0, 0,                !- X,Y,Z Vertex 3 {m}
+    10, 0, 3;                !- X,Y,Z Vertex 4 {m}
+
+BuildingSurface:Detailed,
+    EastWall,                !- Name
+    Wall,                    !- Surface Type
+    WallConstruction,        !- Construction Name
+    EducationalZone,         !- Zone Name
+    ,                        !- Space Name
+    Outdoors,                !- Outside Boundary Condition
+    ,                        !- Outside Boundary Condition Object
+    SunExposed,              !- Sun Exposure
+    WindExposed,             !- Wind Exposure
+    ,                        !- View Factor to Ground
+    4,                       !- Number of Vertices
+    10, 0, 3,                !- X,Y,Z Vertex 1 {m}
+    10, 0, 0,                !- X,Y,Z Vertex 2 {m}
+    10, 6, 0,                !- X,Y,Z Vertex 3 {m}
+    10, 6, 3;                !- X,Y,Z Vertex 4 {m}
+
+BuildingSurface:Detailed,
+    NorthWall,               !- Name
+    Wall,                    !- Surface Type
+    WallConstruction,        !- Construction Name
+    EducationalZone,         !- Zone Name
+    ,                        !- Space Name
+    Outdoors,                !- Outside Boundary Condition
+    ,                        !- Outside Boundary Condition Object
+    SunExposed,              !- Sun Exposure
+    WindExposed,             !- Wind Exposure
+    ,                        !- View Factor to Ground
+    4,                       !- Number of Vertices
+    10, 6, 3,                !- X,Y,Z Vertex 1 {m}
+    10, 6, 0,                !- X,Y,Z Vertex 2 {m}
+    0, 6, 0,                 !- X,Y,Z Vertex 3 {m}
+    0, 6, 3;                 !- X,Y,Z Vertex 4 {m}
+
+BuildingSurface:Detailed,
+    WestWall,                !- Name
+    Wall,                    !- Surface Type
+    WallConstruction,        !- Construction Name
+    EducationalZone,         !- Zone Name
+    ,                        !- Space Name
+    Outdoors,                !- Outside Boundary Condition
+    ,                        !- Outside Boundary Condition Object
+    SunExposed,              !- Sun Exposure
+    WindExposed,             !- Wind Exposure
+    ,                        !- View Factor to Ground
+    4,                       !- Number of Vertices
+    0, 6, 3,                 !- X,Y,Z Vertex 1 {m}
+    0, 6, 0,                 !- X,Y,Z Vertex 2 {m}
+    0, 0, 0,                 !- X,Y,Z Vertex 3 {m}
+    0, 0, 3;                 !- X,Y,Z Vertex 4 {m}
+
+!- Parametric window on the south wall. ``Window`` (the simplified
+!- fenestration object) takes Length + Height directly, so the runner
+!- sets Length = window_area / WINDOW_HEIGHT and the area follows. The
+!- 10 m × 3 m south wall holds up to WINDOW_HEIGHT × 10 m of glazing,
+!- comfortably above the manifest's 20 m² max at WINDOW_HEIGHT = 2.5 m.
+Window,
+    SouthWindow,             !- Name
+    WindowConstruction,      !- Construction Name
+    SouthWall,               !- Building Surface Name
+    ,                        !- Frame and Divider Name
+    1,                       !- Multiplier
+    1.0,                     !- Starting X Coordinate {m}
+    0.3,                     !- Starting Z Coordinate {m}
+    ${WINDOW_LENGTH},        !- Length {m}
+    ${WINDOW_HEIGHT};        !- Height {m}
+
+!- ----------------------------------------------------------------
+!- Ideal-loads conditioning — no full HVAC plant. Heating/cooling
+!- delivered with NoLimit capacity so the zone is met every hour;
+!- the energy shows up under End Uses "Heating"/"Cooling" (district)
+!- and the peak comes from the supply-air heating-rate output.
+!- ----------------------------------------------------------------
+
+ScheduleTypeLimits,
+    Temperature,             !- Name
+    -60,                     !- Lower Limit Value {C}
+    200,                     !- Upper Limit Value {C}
+    Continuous,              !- Numeric Type
+    Temperature;             !- Unit Type
+
+ScheduleTypeLimits,
+    ControlType,             !- Name
+    0,                       !- Lower Limit Value
+    4,                       !- Upper Limit Value
+    Discrete;                !- Numeric Type
+
+Schedule:Constant,
+    HeatingSetpointSched,    !- Name
+    Temperature,             !- Schedule Type Limits Name
+    20;                      !- Constant Value {C}
+
+Schedule:Constant,
+    CoolingSetpointSched,    !- Name
+    Temperature,             !- Schedule Type Limits Name
+    25;                      !- Constant Value {C}
+
+Schedule:Constant,
+    DualSetpointControlType, !- Name
+    ControlType,             !- Schedule Type Limits Name
+    4;                       !- Constant Value (4 = DualSetpoint)
+
+ZoneControl:Thermostat,
+    ZoneThermostat,          !- Name
+    EducationalZone,         !- Zone or ZoneList Name
+    DualSetpointControlType, !- Control Type Schedule Name
+    ThermostatSetpoint:DualSetpoint, !- Control 1 Object Type
+    DualSetpoint;            !- Control 1 Name
+
+ThermostatSetpoint:DualSetpoint,
+    DualSetpoint,            !- Name
+    HeatingSetpointSched,    !- Heating Setpoint Temperature Schedule Name
+    CoolingSetpointSched;    !- Cooling Setpoint Temperature Schedule Name
+
+ZoneHVAC:IdealLoadsAirSystem,
+    EducationalZone Ideal Loads, !- Name
+    ,                        !- Availability Schedule Name
+    EducationalZone Supply Inlet, !- Zone Supply Air Node Name
+    ,                        !- Zone Exhaust Air Node Name
+    ,                        !- System Inlet Air Node Name
+    50,                      !- Maximum Heating Supply Air Temperature {C}
+    13,                      !- Minimum Cooling Supply Air Temperature {C}
+    0.0156,                  !- Maximum Heating Supply Air Humidity Ratio {kgWater/kgDryAir}
+    0.0077,                  !- Minimum Cooling Supply Air Humidity Ratio {kgWater/kgDryAir}
+    NoLimit,                 !- Heating Limit
+    ,                        !- Maximum Heating Air Flow Rate {m3/s}
+    ,                        !- Maximum Sensible Heating Capacity {W}
+    NoLimit,                 !- Cooling Limit
+    ,                        !- Maximum Cooling Air Flow Rate {m3/s}
+    ,                        !- Maximum Total Cooling Capacity {W}
+    ,                        !- Heating Availability Schedule Name
+    ,                        !- Cooling Availability Schedule Name
+    ConstantSupplyHumidityRatio, !- Dehumidification Control Type
+    ,                        !- Cooling Sensible Heat Ratio {dimensionless}
+    ConstantSupplyHumidityRatio, !- Humidification Control Type
+    ,                        !- Design Specification Outdoor Air Object Name
+    ,                        !- Outdoor Air Inlet Node Name
+    ,                        !- Demand Controlled Ventilation Type
+    ,                        !- Outdoor Air Economizer Type
+    ,                        !- Heat Recovery Type
+    ,                        !- Sensible Heat Recovery Effectiveness {dimensionless}
+    ;                        !- Latent Heat Recovery Effectiveness {dimensionless}
+
+ZoneHVAC:EquipmentList,
+    EducationalZone Equipment, !- Name
+    SequentialLoad,          !- Load Distribution Scheme
+    ZoneHVAC:IdealLoadsAirSystem, !- Zone Equipment 1 Object Type
+    EducationalZone Ideal Loads, !- Zone Equipment 1 Name
+    1,                       !- Zone Equipment 1 Cooling Sequence
+    1,                       !- Zone Equipment 1 Heating or No-Load Sequence
+    ,                        !- Zone Equipment 1 Sequential Cooling Fraction Schedule Name
+    ;                        !- Zone Equipment 1 Sequential Heating Fraction Schedule Name
+
+ZoneHVAC:EquipmentConnections,
+    EducationalZone,         !- Zone Name
+    EducationalZone Equipment, !- Zone Conditioning Equipment List Name
+    EducationalZone Supply Inlet, !- Zone Air Inlet Node or NodeList Name
+    ,                        !- Zone Air Exhaust Node or NodeList Name
+    EducationalZone Air Node, !- Zone Air Node Name
+    EducationalZone Return;  !- Zone Return Air Node or NodeList Name
+
+!- ----------------------------------------------------------------
+!- Outputs — SQL DB + the annual summary table + the heating-rate
+!- variable the runner mines for the peak load.
+!- ----------------------------------------------------------------
+
+Output:SQLite,
+    SimpleAndTabular;        !- Option Type
+
+Output:Table:SummaryReports,
+    AnnualBuildingUtilityPerformanceSummary; !- Report 1 Name
+
+OutputControl:Table:Style,
+    CommaAndHTML,            !- Column Separator
+    JtoKWH;                  !- Unit Conversion
+
+!- The peak heating load: the runner takes the MAX of this over the
+!- annual run (the coldest design hour) and converts W → kW.
+Output:Variable,
+    EducationalZone Ideal Loads, !- Key Value
+    Zone Ideal Loads Supply Air Sensible Heating Rate, !- Variable Name
+    Hourly;                  !- Reporting Frequency
+
+!- Window heat-loss energy — surfaced for the optional window-envelope
+!- metric (parallels the Validibot extraction).
+Output:Variable,
+    *,                       !- Key Value
+    Surface Window Heat Loss Energy, !- Variable Name
+    RunPeriod;               !- Reporting Frequency

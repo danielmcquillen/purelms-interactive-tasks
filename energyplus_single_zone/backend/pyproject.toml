@@ -1,17 +1,18 @@
 [project]
 name = "purelms-itask-energyplus-single-zone"
-version = "0.1.0"
-description = "EnergyPlus single-zone InteractiveTask backend — stubbed analytical thermal model (Slice 3d Phase C.1; real EnergyPlus deferred to Slice 4)"
+version = "0.2.0"
+description = "EnergyPlus single-zone InteractiveTask backend — real EnergyPlus (IDF template + bundled binary + eplusout.sql extraction) with a pure-Python analytical fallback for binary-free dev/CI"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [
     { name = "Daniel McQuillen", email = "daniel@mcquilleninteractive.com" },
 ]
 dependencies = [
-    # v1's stubbed thermal model is pure Python — no scientific
-    # dependencies. When real EnergyPlus lands (Slice 4+), this
-    # will pick up ``eppy`` or ``opyplus`` for IDF/EPW handling
-    # plus a vendored EnergyPlus binary in the Dockerfile.
+    # No scientific Python deps: the real path shells out to the bundled
+    # EnergyPlus binary (vendored in the Dockerfile) and parses
+    # eplusout.sql with the stdlib ``sqlite3``. IDF generation is a
+    # ``string.Template`` substitution. The only dependency is the
+    # envelope schema.
     "purelms-shared>=0.4.0",
 ]
 

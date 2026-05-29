@@ -16,11 +16,15 @@ future drift-detection check passes.
 BACKEND_TYPE = "ENERGYPLUS_SINGLE_ZONE"
 BACKEND_NAME = "EnergyPlus Single-Zone"
 BACKEND_DESCRIPTION = (
-    "Single-zone building energy through one window. v1 ships an "
-    "analytical steady-state model (U × A × HDD × hours) in lieu of "
-    "a real EnergyPlus binary; real EnergyPlus is Slice 4+ work."
+    "Single-zone building energy through one window. v0.2 runs a REAL "
+    "EnergyPlus simulation: it builds a single-zone IDF from the learner's "
+    "parameters, runs the bundled EnergyPlus binary against a per-zone EPW "
+    "weather file, and mines eplusout.sql for annual heating/cooling + peak "
+    "load. A pure-Python analytical model is the binary-free dev/CI fallback "
+    "(PURELMS_EPLUS_MODE=analytical), so contributors can iterate without the "
+    "~500 MB EnergyPlus dependency."
 )
-BACKEND_VERSION = "0.1.0"
+BACKEND_VERSION = "0.2.0"
 
 # Mirror the manifest's ``parameters:`` block (informational).
 EXPOSED_PARAMETERS = [
@@ -56,7 +60,7 @@ OUTPUT_METRICS = [
     {"name": "notes", "type": "string"},
 ]
 
-# v1 manifests are sync-only (per ADR-0014). Async streaming is
-# Slice 4+ work and will require real EnergyPlus with progress
-# callbacks during the multi-month annual run.
+# Still sync-only (per ADR-0014). The single-zone annual run is fast
+# (seconds), so there's no need for progress callbacks yet; async
+# streaming stays a future capability for heavier multi-zone models.
 SUPPORTS_STREAMING = False
