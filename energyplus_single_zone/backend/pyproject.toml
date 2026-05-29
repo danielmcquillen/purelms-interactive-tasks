@@ -1,6 +1,6 @@
 [project]
 name = "purelms-itask-energyplus-single-zone"
-version = "0.2.0"
+version = "0.2.1"
 description = "EnergyPlus single-zone InteractiveTask backend — real EnergyPlus (IDF template + bundled binary + eplusout.sql extraction) with a pure-Python analytical fallback for binary-free dev/CI"
 requires-python = ">=3.10"
 license = "MIT"

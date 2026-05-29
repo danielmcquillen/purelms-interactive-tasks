@@ -12,14 +12,16 @@
 # echo-demo can iterate without the ~500 MB EnergyPlus dependency. Both
 # paths return identical output keys; the ``notes`` string says which ran.
 #
-# Bumped 0.1.0 → 0.2.0 for the real-EnergyPlus contract change; re-install
-# with ``--replace-active`` (ADR-0014 single-active-version invariant).
+# Bumped 0.1.0 → 0.2.0 (real EnergyPlus) → 0.2.1 (lms_outcomes grading
+# rule). Re-install with ``--replace-active`` (ADR-0014 single-active-
+# version invariant). 0.2.1 changes only the persisted manifest (the
+# grading rule); the container image is unchanged.
 
 schema_version: "purelms.interactive_task.v1"
 
 slug: energyplus_single_zone
 name: EnergyPlus Single-Zone
-version: 0.2.0
+version: 0.2.1
 description: |
   Single-zone building-energy InteractiveTask. The learner picks a
   glazing U-value, window area, and climate zone; the backend
@@ -144,8 +146,29 @@ lms_context_used:
 
 requires_user_context: false
 
-# v1: empty — falls back to MVP-A semantic (status == SUCCESS → passed).
-# A course author wanting to require e.g. "annual_heating_kWh <= 1500"
-# can wire it up at Layer 2 on the InteractiveTaskBlock until the
-# v2 LMS-side outcome evaluator lands.
-lms_outcomes: {}
+# lms_outcomes (ADR-0014 §Category 4) — the LMS-side evaluator (Slice 3e)
+# reads these rules from the persisted manifest at completion and maps the
+# backend's outputs onto the grade book's (passed, score) fields.
+#
+# Pedagogy: "design a window with annual heating below 2,800 kWh." For the
+# default 5A / 5 m² scenario the baseline U=2.5 glazing yields ~3,047 kWh
+# (FAILS); improving to roughly U<=1.7 brings it under target (PASSES). So
+# running the defaults and seeing FAILED motivates the learner to pick a
+# better-insulating window — the whole point of the exercise. ``score``
+# gives graded partial credit (lower heating → higher score) regardless.
+#
+# The threshold is the InteractiveTask author's sensible default; a course
+# author teaching a different climate/window size can override it per block
+# via the block's interaction_details.lms_outcomes (e.g.
+# {"passed": {"threshold": 4000}} for a 6A course) — only the threshold-
+# style args; source/transform stay locked here. (L2 override shipped
+# 2026-05-29.)
+lms_outcomes:
+  passed:
+    source: outputs.annual_heating_kWh
+    transform: less_than
+    threshold: 2800
+  score:
+    source: outputs.annual_heating_kWh
+    transform: normalize_inverse
+    bounds: [2000, 5000]
