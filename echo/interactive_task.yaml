@@ -5,7 +5,7 @@
 # outputs. The point is to exercise the dispatcher → submit → run →
 # poll → outputs round-trip without any real domain compute.
 #
-# Per ADR-0014, every InteractiveTask carries an interactive_task.yaml.
+# Every InteractiveTask carries an interactive_task.yaml.
 # Echo's manifest is intentionally minimal — it accepts arbitrary
 # parameters and produces them as outputs verbatim, so the parameter
 # and output schemas are open-ended at the manifest level. Real

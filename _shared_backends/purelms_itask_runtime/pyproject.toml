@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "purelms-itask-runtime"
+version = "0.1.0"
+description = "Shared runtime helper for PureLMS InteractiveTask backend containers: local-dir vs GCS envelope I/O + progress/complete worker callbacks."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "Daniel McQuillen", email = "daniel@mcquilleninteractive.com" },
+]
+dependencies = [
+    # Envelope + callback schemas. Same floor pin as every backend.
+    "purelms-shared>=0.4.0",
+]
+
+[project.optional-dependencies]
+# Only the async / Cloud Run Jobs deployment needs these — GCS object
+# I/O + OIDC tokens for the worker callbacks. The local DockerCompose
+# (sync) path reads/writes local dirs and posts no callbacks, so it runs
+# without them. The deployed image installs ``purelms-itask-runtime[cloud]``.
+cloud = [
+    "google-cloud-storage>=2.10",
+    "google-auth>=2.20",
+]
+dev = [
+    "pytest>=8.0,<10",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

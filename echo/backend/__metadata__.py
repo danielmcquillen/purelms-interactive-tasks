@@ -1,8 +1,8 @@
 """
 Per-backend runtime self-description.
 
-PureLMS reads this at backend-registration time (future work, per
-ADR-0002 Item 1's "metadata drift" open question) to verify the
+PureLMS reads this at backend-registration time (future work) to
+verify the
 declared `SimulationBackendRegistration` matches the container's
 self-report. Until that registration-time check ships, this file is
 informational only — but the convention is established so future
@@ -31,5 +31,5 @@ OUTPUT_METRICS = [
 ]
 
 # Whether this backend can run as an async streaming service
-# (Tier-4 per ADR-0002). Echo is sync-only.
+# . Echo is sync-only.
 SUPPORTS_STREAMING = False

@@ -10,7 +10,7 @@ when no EnergyPlus binary is present.
 Adding a fourth climate zone is a data change here + a manifest enum
 addition + bundling one more EPW in the Dockerfile — no runner logic
 changes. That's the "configurable educational backend" property the
-framework wants (ADR-0014): the *scenario* is data; the *machinery*
+framework wants: the *scenario* is data; the *machinery*
 (IDF templating, subprocess, SQL extraction) is generic.
 
 ## EPW weather files

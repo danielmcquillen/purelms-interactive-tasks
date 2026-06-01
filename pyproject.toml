@@ -1,7 +1,7 @@
 [project]
 name = "purelms-interactive-tasks"
 version = "0.1.0"
-description = "Container + frontend pairs that PureLMS launches as InteractiveTasks (per ADR-0014)"
+description = "Container + frontend pairs that PureLMS launches as InteractiveTasks"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -25,7 +25,7 @@ authors = [
 dependencies = [
     # Pydantic envelope schemas — every backend reads + writes these.
     # Floor pinned to the version that introduced unit_block_id on
-    # SimulationInputEnvelope (Slice 3d sweep per ADR-0014). Older
+    # SimulationInputEnvelope (Slice 3d sweep). Older
     # versions reject the field due to ``extra="forbid"``.
     "purelms-shared>=0.4.0",
 ]
@@ -42,6 +42,10 @@ dependencies = [
 members = [
     "echo/backend",
     "energyplus_single_zone/backend",
+    # Shared backend runtime helper (local-dir vs GCS envelope I/O +
+    # progress/complete worker callbacks). Vendored into each backend
+    # image's _vendor/ wheel like purelms-shared; see the justfile.
+    "_shared_backends/purelms_itask_runtime",
 ]
 
 [project.optional-dependencies]

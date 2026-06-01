@@ -1,6 +1,6 @@
 # purelms-interactive-tasks
 
-Container-and-frontend pairs that the [PureLMS](https://github.com/danielmcquillen/purelms) (AGPL) platform launches as **InteractiveTasks** — the runtime concept defined by [ADR-0014](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0014-interactive-task-framework.md).
+Container-and-frontend pairs that the [PureLMS](https://github.com/danielmcquillen/purelms) (AGPL) platform launches as **InteractiveTasks**.
 
 This repo is **MIT-licensed**. PureLMS itself is AGPL-3.0-or-later; the InteractiveTasks here are intentionally permissively licensed so educator-contributors can ship their domain expertise without copyleft friction. The data contract between PureLMS and these tasks is the Pydantic schema package [`purelms-shared`](https://github.com/danielmcquillen/purelms-shared) (also MIT).
 
@@ -46,7 +46,7 @@ purelms-interactive-tasks/
 └── ...
 ```
 
-**Slug naming convention**: snake_case at the directory level and inside `interactive_task.yaml`'s `slug:` field (`energyplus_single_zone`, not `energyplus-single-zone`). The Docker image name derives a hyphenated alias at the boundary (`purelms-itask-energyplus-single-zone:<version>`); see [ADR-0014's Docker image naming section](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0014-interactive-task-framework.md#docker-image-naming) for the rule.
+**Slug naming convention**: snake_case at the directory level and inside `interactive_task.yaml`'s `slug:` field (`energyplus_single_zone`, not `energyplus-single-zone`). The Docker image name derives a hyphenated alias at the boundary (`purelms-itask-energyplus-single-zone:<version>`); the `s/_/-/g` conversion is done once, inside the LMS's `install_interactive_task` command.
 
 ## The contracts (three edges)
 
@@ -56,7 +56,7 @@ purelms-interactive-tasks/
 
 3. **Frontend ↔ Container** (implicit schema contract via LMS): the bundle's `parameters` payload flows through the LMS into the container's `input.json`; the container's `outputs` flow back through the LMS to the bundle. Both sides agree on the shape via the manifest's `parameters:` and `outputs:` sections — no runtime negotiation.
 
-[ADR-0014](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0014-interactive-task-framework.md) is the authoritative spec for all three edges + the four-category data model + the three-layer config model + the five-phase lifecycle.
+The [`BACKEND_AUTHORING_GUIDE.md`](BACKEND_AUTHORING_GUIDE.md) is the in-repo reference for all three edges + the four-category data model + the three-layer config model + the five-phase lifecycle.
 
 ## Adding a new InteractiveTask
 

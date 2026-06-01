@@ -1,6 +1,6 @@
 # Contributing to purelms-interactive-tasks
 
-Thanks for adding an InteractiveTask. This doc covers the practical mechanics; the framework's authoritative spec lives in [ADR-0014](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0014-interactive-task-framework.md), and the deep author-facing how-to reference is [`BACKEND_AUTHORING_GUIDE.md`](BACKEND_AUTHORING_GUIDE.md) (read order: README → CONTRIBUTING → BACKEND_AUTHORING_GUIDE).
+Thanks for adding an InteractiveTask. This doc covers the practical mechanics; the deep author-facing how-to reference is [`BACKEND_AUTHORING_GUIDE.md`](BACKEND_AUTHORING_GUIDE.md) (read order: README → CONTRIBUTING → BACKEND_AUTHORING_GUIDE).
 
 ## What you're building
 
@@ -32,12 +32,12 @@ purelms-interactive-tasks/
 
 **`<domain>_<scope>` in snake_case** — e.g. `energyplus_single_zone`, `gel_electrophoresis_basic`, `python_grading_pep8`. Underscores, not hyphens. The slug is what PureLMS's `InteractiveTaskBlock.simulation_backend_slug` references.
 
-Docker images derive a hyphenated alias at the boundary only: slug `energyplus_single_zone` → image `purelms-itask-energyplus-single-zone:<version>`. The `s/_/-/g` conversion is done once, inside the LMS's `install_interactive_task` command. See [ADR-0014's Docker image naming section](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0014-interactive-task-framework.md#docker-image-naming).
+Docker images derive a hyphenated alias at the boundary only: slug `energyplus_single_zone` → image `purelms-itask-energyplus-single-zone:<version>`. The `s/_/-/g` conversion is done once, inside the LMS's `install_interactive_task` command.
 
 ## Adding an InteractiveTask
 
 1. **Copy the template.** `cp -r _template <your_slug>` is the fastest start.
-2. **Fill in `interactive_task.yaml`.** Required: `schema_version: "purelms.interactive_task.v1"`, `slug`, `name`, `version`, `description`, `backend` (image, credit_cost, trust_tier, execution_mode, default_timeout_seconds), `frontend.bundle`. Recommended: `parameters`, `outputs`, `lms_context_used`, `lms_outcomes`. See [ADR-0014's manifest schema section](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0014-interactive-task-framework.md#interactive_taskyaml-v1-schema).
+2. **Fill in `interactive_task.yaml`.** Required: `schema_version: "purelms.interactive_task.v1"`, `slug`, `name`, `version`, `description`, `backend` (image, credit_cost, trust_tier, execution_mode, default_timeout_seconds), `frontend.bundle`. Recommended: `parameters`, `outputs`, `lms_context_used`, `lms_outcomes`. See the manifest section of [`BACKEND_AUTHORING_GUIDE.md`](BACKEND_AUTHORING_GUIDE.md).
 3. **Add to the workspace.** Append `"<your_slug>/backend"` to `pyproject.toml`'s `[tool.uv.workspace.members]` array.
 4. **Implement the container** (`backend/main.py`):
    - Read input envelope from `$PURELMS_INPUT_DIR/input.json`.
@@ -60,7 +60,7 @@ Docker images derive a hyphenated alias at the boundary only: slug `energyplus_s
    cd path/to/purelms
    uv run python manage.py install_interactive_task ../purelms-interactive-tasks/<your_slug>
    ```
-   The install command reads `interactive_task.yaml`, validates the manifest schema, computes a default block-level config for the LMS-side admin form, stages the frontend bundle into `purelms/static/backends/<slug>/`, and creates a `SimulationBackendRegistration` row. See [ADR-0014's installation mechanics section](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0014-interactive-task-framework.md#installation-mechanics-phase-3-spec).
+   The install command reads `interactive_task.yaml`, validates the manifest schema, computes a default block-level config for the LMS-side admin form, stages the frontend bundle into `purelms/static/backends/<slug>/`, and creates a `SimulationBackendRegistration` row. See the installation + lifecycle section of [`BACKEND_AUTHORING_GUIDE.md`](BACKEND_AUTHORING_GUIDE.md).
 
 ## Local development loop
 

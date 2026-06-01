@@ -4,7 +4,7 @@
 # build. Recipes operate per-slug (e.g. `just build echo`) or across
 # all slugs (`just build-all`).
 #
-# Naming convention (per ADR-0014):
+# Naming convention:
 #   - Slug stays snake_case at the directory level (e.g. echo,
 #     energyplus_single_zone)
 #   - Docker image name derives a hyphenated alias at the boundary
@@ -31,9 +31,15 @@ _stage-shared-wheel slug shared_path=env_var_or_default("PURELMS_SHARED_PATH", "
     @rm -rf "{{slug}}/backend/_vendor"
     @mkdir -p "{{slug}}/backend/_vendor"
     cd "{{shared_path}}" && uv build --wheel --out-dir "{{justfile_directory()}}/{{slug}}/backend/_vendor"
+    # Also stage the in-repo shared backend-runtime wheel (local-dir vs
+    # GCS envelope I/O + progress/complete worker callbacks). The
+    # Dockerfile installs ``purelms-itask-runtime[cloud]`` from _vendor/,
+    # which pulls the purelms-shared wheel staged above + google-cloud-
+    # storage / google-auth from PyPI.
+    cd "{{justfile_directory()}}/_shared_backends/purelms_itask_runtime" && uv build --wheel --out-dir "{{justfile_directory()}}/{{slug}}/backend/_vendor"
 
 # Build the container image for one InteractiveTask.
-# Image name derives from slug by s/_/-/g (per ADR-0014).
+# Image name derives from slug by s/_/-/g.
 # Usage: just build echo
 # Usage: just build energyplus_single_zone
 build slug: (_stage-shared-wheel slug)
@@ -63,7 +69,7 @@ push slug registry=env_var_or_default("DOCKER_IMAGE_REGISTRY", ""):
 # for ad-hoc staging). Convention:
 #   purelms/static/backends/<slug>/<slug>.js
 frontend-build slug:
-    cd {{slug}}/frontend && pnpm run build
+    cd {{slug}}/frontend && npm run build
 
 # Build all InteractiveTask frontends.
 frontend-build-all:
@@ -77,7 +83,7 @@ frontend-build-all:
 # Run tests for one InteractiveTask (Python + TypeScript).
 test slug:
     cd {{slug}}/backend && uv run pytest
-    cd {{slug}}/frontend && pnpm test
+    cd {{slug}}/frontend && npm test
 
 # Run tests across all InteractiveTasks + the workspace lint.
 test-all:

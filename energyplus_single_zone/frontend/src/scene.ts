@@ -12,7 +12,7 @@
  *   - The wall color shifts with the climate zone (warmer for 4A,
  *     cooler for 6A) as a qualitative cue
  *   - An ambient + directional light pair so the cube reads as 3D
- *   - Auto-rotating camera so the learner sees the window
+ *   - Click-drag (OrbitControls) to orbit the camera around the zone
  *
  * The 3D viz is a pedagogical aid, not a substitute for the
  * numeric results. The cards in the form panel are the actual
@@ -26,6 +26,7 @@
  */
 
 import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 import { CLIMATE_DATA } from "./constants";
 
@@ -106,6 +107,18 @@ export function createScene(container: HTMLElement): SceneHandle | null {
   zoneMesh.position.y = zoneHeight / 2;
   scene.add(zoneMesh);
 
+  // Click-drag to orbit the camera around the zone (replaces the old
+  // auto-rotation). Damping gives the drag a smooth, weighted feel.
+  // Pan is disabled to keep the interaction simple — rotate + zoom only.
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(0, zoneHeight / 2, 0);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.enablePan = false;
+  controls.minDistance = 4;
+  controls.maxDistance = 18;
+  controls.update();
+
   // Edge highlight so the cube doesn't read as a flat surface.
   const edges = new THREE.EdgesGeometry(zoneGeometry);
   const edgesMesh = new THREE.LineSegments(
@@ -144,14 +157,13 @@ export function createScene(container: HTMLElement): SceneHandle | null {
   let rafHandle = 0;
   let disposed = false;
 
-  /** Animation loop — gentle auto-rotation. */
+  // Render loop. The camera is driven by OrbitControls (click-drag);
+  // ``controls.update()`` must run each frame for the damping to ease
+  // out after a drag. The zone + window stay fixed — only the camera
+  // moves — so the window remains pinned to the front face.
   function tick(): void {
     if (disposed) return;
-    zoneMesh.rotation.y += 0.003;
-    edgesMesh.rotation.y = zoneMesh.rotation.y;
-    windowMesh.position.x = Math.sin(zoneMesh.rotation.y) * (zoneDepth / 2 + 0.001);
-    windowMesh.position.z = Math.cos(zoneMesh.rotation.y) * (zoneDepth / 2 + 0.001);
-    windowMesh.rotation.y = zoneMesh.rotation.y;
+    controls.update();
     renderer.render(scene, camera);
     rafHandle = requestAnimationFrame(tick);
   }
@@ -186,6 +198,7 @@ export function createScene(container: HTMLElement): SceneHandle | null {
     dispose(): void {
       disposed = true;
       cancelAnimationFrame(rafHandle);
+      controls.dispose();
       renderer.dispose();
       windowGeometry.dispose();
       windowMaterial.dispose();

@@ -1,7 +1,7 @@
 [project]
 name = "purelms-itask-echo"
 version = "0.1.0"
-description = "Stub echo InteractiveTask backend — permanent integration-test fixture for the PureLMS execution path (per ADR-0014)"
+description = "Stub echo InteractiveTask backend — permanent integration-test fixture for the PureLMS execution path"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [
@@ -9,6 +9,11 @@ authors = [
 ]
 dependencies = [
     "purelms-shared>=0.4.0",
+    # Shared backend runtime: local-dir vs GCS envelope I/O + the
+    # progress/complete worker callbacks. Workspace member (not on
+    # PyPI), resolved via [tool.uv.sources] below; the image installs
+    # its vendored wheel with the [cloud] extra (see the Dockerfile).
+    "purelms-itask-runtime",
 ]
 
 [project.optional-dependencies]
@@ -17,7 +22,10 @@ dev = [
 ]
 
 # purelms-shared is a published PyPI package (>=0.4.0 above) — no
-# source override needed (audit P0-2 closed).
+# source override needed (audit P0-2 closed). purelms-itask-runtime is
+# an in-repo workspace member, so it resolves from the workspace.
+[tool.uv.sources]
+purelms-itask-runtime = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

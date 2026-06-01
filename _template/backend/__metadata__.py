@@ -1,12 +1,12 @@
 """
 Per-backend runtime self-description.
 
-PureLMS reads this at backend-registration time (future work, per
-ADR-0002 Item 1's "metadata drift" open question) to verify the
+PureLMS reads this at backend-registration time (future work) to
+verify the
 declared ``SimulationBackendRegistration`` matches the container's
 self-report. Until that registration-time check ships, this file is
 informational only — but the convention is established so new
-backends ship with it from day one (per ADR-0014).
+backends ship with it from day one.
 """
 
 # TODO: fill in for your backend.
@@ -33,6 +33,6 @@ OUTPUT_METRICS = [
 ]
 
 # Whether this backend can run as an async streaming service
-# (Tier-4 per ADR-0002). v1 InteractiveTasks are sync-only — leave
+# . v1 InteractiveTasks are sync-only — leave
 # this False unless you're prototyping async support.
 SUPPORTS_STREAMING = False

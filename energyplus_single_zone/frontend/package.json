@@ -2,7 +2,7 @@
   "name": "@purelms-interactive-tasks/energyplus-single-zone-frontend",
   "version": "0.1.0",
   "private": true,
-  "description": "EnergyPlus single-zone InteractiveTask frontend — parameter sliders + Three.js 3D zone visualization + result cards (per ADR-0014).",
+  "description": "EnergyPlus single-zone InteractiveTask frontend — parameter sliders + Three.js 3D zone visualization + result cards.",
   "license": "MIT",
   "type": "module",
   "scripts": {

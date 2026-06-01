@@ -69,13 +69,18 @@ COPY --from=eplus-builder /opt/energyplus /opt/energyplus
 COPY --from=eplus-builder /opt/weather /opt/weather
 ENV PATH="/opt/energyplus:${PATH}"
 
-# Python deps: install purelms-shared from the vendored wheel (staged by
-# the justfile). No scientific deps — the runner shells out to the binary
-# and parses eplusout.sql with the stdlib sqlite3.
+# Python deps: install the shared backend runtime (with its ``cloud``
+# extra) from the vendored wheels (staged by the justfile). pip resolves
+# purelms-itask-runtime + purelms-shared from --find-links /vendor and
+# pulls google-cloud-storage / google-auth (GCS envelope I/O + OIDC for
+# the worker callbacks) from PyPI — so the same image meets the runtime
+# contract on the local DockerCompose AND the Cloud Run Jobs path. No
+# scientific deps: the runner shells out to the binary + parses
+# eplusout.sql with the stdlib sqlite3.
 WORKDIR /home/purelms
 COPY pyproject.toml ./
 COPY _vendor /vendor/
-RUN pip install --no-cache-dir --find-links /vendor purelms-shared
+RUN pip install --no-cache-dir --find-links /vendor "purelms-itask-runtime[cloud]"
 
 # Non-root runtime user (uid 1000, matches the run-scoped-isolation policy).
 RUN useradd --create-home --uid 1000 purelms

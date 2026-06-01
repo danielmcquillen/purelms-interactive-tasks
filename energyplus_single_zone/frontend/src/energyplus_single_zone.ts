@@ -1,7 +1,7 @@
 /**
  * EnergyPlus single-zone InteractiveTask — frontend bundle.
  *
- * Per ADR-0014, this module exports a ``mount(element, config,
+ * This module exports a ``mount(element, config,
  * helpers)`` function. The LMS dispatcher dynamic-imports the
  * built bundle (``dist/energyplus_single_zone.js``) and calls
  * ``mount()`` exactly once per placement.
@@ -50,6 +50,7 @@ import type {
   MountFn,
   MountHelpers,
   NumberParamConfig,
+  ProgressBarController,
   SimulationRunStatusResponse,
 } from "./types";
 
@@ -147,7 +148,7 @@ export const mount: MountFn = async (
   // deactivated. Render a "no longer available" message instead of
   // the form.
   if (helpers.meta.backendAvailable === false) {
-    formPanel.append(buildUnavailableNotice(helpers));
+    formPanel.append(buildUnavailableNotice());
     return;
   }
 
@@ -178,11 +179,17 @@ export const mount: MountFn = async (
   statusEl.setAttribute("aria-live", "polite");
   statusEl.style.cssText = "margin-top: 12px; min-height: 1.5em; color: #6b7280;";
 
+  // Container the run-time progress bar mounts into. The bar itself
+  // is supplied by the LMS dispatcher (helpers.ui), so its markup +
+  // styling stay consistent across every interactive task.
+  const progressEl = document.createElement("div");
+  progressEl.className = "purelms-task-progress-host";
+
   const resultsEl = document.createElement("div");
   resultsEl.className = "purelms-task-results";
   resultsEl.style.cssText = "margin-top: 16px;";
 
-  formPanel.append(formEl, statusEl, resultsEl);
+  formPanel.append(formEl, statusEl, progressEl, resultsEl);
 
   formEl.addEventListener("submit", (ev) => {
     ev.preventDefault();
@@ -191,6 +198,7 @@ export const mount: MountFn = async (
       parameters: current,
       submitButton,
       statusEl,
+      progressEl,
       resultsEl,
       helpers,
     });
@@ -473,6 +481,7 @@ interface HandleSubmitArgs {
   parameters: ParameterState;
   submitButton: HTMLButtonElement;
   statusEl: HTMLElement;
+  progressEl: HTMLElement;
   resultsEl: HTMLElement;
   helpers: MountHelpers;
 }
@@ -481,12 +490,40 @@ async function handleSubmit({
   parameters,
   submitButton,
   statusEl,
+  progressEl,
   resultsEl,
   helpers,
 }: HandleSubmitArgs): Promise<void> {
   submitButton.disabled = true;
   resultsEl.replaceChildren();
-  statusEl.textContent = "Submitting…";
+
+  // The LMS dispatcher provides the shared Bootstrap progress bar.
+  // Guard for older dispatchers that predate helpers.ui — the text
+  // status line is the fallback, so the task still works.
+  const bar = helpers.ui?.createProgressBar?.() ?? null;
+
+  // Status text has a SINGLE home. When the shared progress bar is
+  // present its (aria-live) caption IS the status line, so we hide the
+  // standalone text line and route status through the bar only —
+  // writing to both is what doubled the "Submitting…" message on
+  // screen (and double-announced it to assistive tech, since both
+  // nodes are aria-live). Without a bar, the text line is the fallback
+  // status surface and stays visible.
+  const setStatus = (text: string, color = "#6b7280"): void => {
+    if (bar) return;
+    statusEl.textContent = text;
+    statusEl.style.color = color;
+  };
+  if (bar) {
+    statusEl.style.display = "none";
+    statusEl.textContent = "";
+    progressEl.replaceChildren(bar.element);
+  } else {
+    statusEl.style.display = "";
+  }
+
+  setStatus("Submitting…");
+  bar?.indeterminate("Submitting…");
 
   let outcome;
   try {
@@ -496,52 +533,111 @@ async function handleSubmit({
       climate_zone: parameters.climate_zone,
     });
   } catch (err) {
-    statusEl.textContent = `Submission failed: ${humanizeError(err)}`;
+    // Learner-actionable rejections (out of credits / tier gate) get
+    // the LMS's shared alert with a top-up / upgrade CTA, rendered into
+    // the results area. Anything else falls back to the text status.
+    const alertEl = helpers.ui?.renderSubmissionError?.(err) ?? null;
+    if (alertEl) {
+      resultsEl.replaceChildren(alertEl);
+      bar?.error("Submission failed");
+      submitButton.disabled = false;
+      return;
+    }
+    setStatus(`Submission failed: ${humanizeError(err)}`, "#dc2626");
+    bar?.error("Submission failed");
     submitButton.disabled = false;
     return;
   }
 
   if (outcome.is_complete || outcome.run === null) {
     // Synchronous backend (e.g. DockerCompose locally): the outcome
-    // carries the terminal state already. But the API surface
-    // doesn't always include the outputs on the outcome — most
-    // commonly we still need to fetch the status to get the
-    // populated outputs dict. The poll iterator handles both.
+    // carries the terminal state already. The request blocked until
+    // the run finished, so the browser never saw a midpoint — an
+    // indeterminate bar is the honest choice regardless of whether
+    // the backend declares it reports progress. The API surface
+    // doesn't always include the outputs on the outcome, so we still
+    // poll once or twice to fetch the populated outputs dict.
+    setStatus("Running…");
+    bar?.indeterminate("Running…");
     if (outcome.run !== null) {
-      for await (const status of helpers.api.pollStatus(outcome.run.id, {
-        intervalSeconds: 1,
-        maxAttempts: 2,
-      })) {
-        if (status.is_terminal) {
-          renderTerminalResult(status, statusEl, resultsEl, helpers);
-          break;
+      try {
+        for await (const status of helpers.api.pollStatus(outcome.run.id, {
+          intervalSeconds: 1,
+          maxAttempts: 2,
+        })) {
+          if (status.is_terminal) {
+            renderTerminalResult(status, setStatus, resultsEl);
+            applyTerminalToBar(bar, status);
+            break;
+          }
         }
+      } catch (err) {
+        setStatus(`Polling failed: ${humanizeError(err)}`, "#dc2626");
+        bar?.error("Run failed");
       }
     } else {
-      statusEl.textContent = "Done (sync, no run id).";
+      setStatus("Done (sync, no run id).");
+      bar?.complete("Done");
     }
     submitButton.disabled = false;
     return;
   }
 
-  // Async path: poll until terminal.
+  // Async path: poll until terminal. A determinate bar is only
+  // meaningful here (the request returned immediately) AND only when
+  // the backend declares it emits progress — otherwise the polled
+  // progress_pct is meaningless and we stay indeterminate.
   const run = outcome.run;
-  statusEl.textContent = `Run ${run.id} dispatched; polling…`;
+  const useDeterminate = helpers.meta.reportsProgress === true;
+  setStatus(`Run ${run.id} dispatched; polling…`);
+  if (bar) {
+    if (useDeterminate) {
+      bar.determinate(0, "Dispatched");
+    } else {
+      bar.indeterminate("Dispatched; polling…");
+    }
+  }
 
   try {
     for await (const status of helpers.api.pollStatus(run.id, {
       intervalSeconds: run.poll_interval_seconds || 2,
     })) {
       if (status.is_terminal) {
-        renderTerminalResult(status, statusEl, resultsEl, helpers);
+        renderTerminalResult(status, setStatus, resultsEl);
+        applyTerminalToBar(bar, status);
         break;
       }
-      statusEl.textContent = formatProgressLine(status);
+      setStatus(formatProgressLine(status));
+      if (bar) {
+        if (useDeterminate) {
+          bar.determinate(status.progress_pct, status.progress_step || "Running…");
+        } else {
+          bar.indeterminate(formatProgressLine(status));
+        }
+      }
     }
   } catch (err) {
-    statusEl.textContent = `Polling failed: ${humanizeError(err)}`;
+    setStatus(`Polling failed: ${humanizeError(err)}`, "#dc2626");
+    bar?.error("Run failed");
   } finally {
     submitButton.disabled = false;
+  }
+}
+
+/**
+ * Drive the progress bar to its terminal visual state from a
+ * terminal run status. Success → solid green; any other terminal
+ * status → solid red. No-op when the bar is absent.
+ */
+function applyTerminalToBar(
+  bar: ProgressBarController | null,
+  status: SimulationRunStatusResponse,
+): void {
+  if (!bar) return;
+  if (status.status === "success") {
+    bar.complete(`Complete (${(status.runtime_seconds ?? 0).toFixed(2)}s)`);
+  } else {
+    bar.error(`Failed: ${status.status}`);
   }
 }
 
@@ -552,21 +648,19 @@ function formatProgressLine(status: SimulationRunStatusResponse): string {
 
 function renderTerminalResult(
   status: SimulationRunStatusResponse,
-  statusEl: HTMLElement,
+  setStatus: (text: string, color?: string) => void,
   resultsEl: HTMLElement,
-  helpers: MountHelpers,
 ): void {
   if (status.status === "success" && status.outputs) {
-    statusEl.textContent = `Run complete (${(status.runtime_seconds ?? 0).toFixed(2)}s).`;
-    statusEl.style.color = "#16a34a";
+    const secs = (status.runtime_seconds ?? 0).toFixed(2);
+    setStatus(`Run complete (${secs}s).`, "#16a34a");
     resultsEl.replaceChildren(
-      buildResultCards(status.outputs as Partial<EnergyPlusOutputs>, helpers),
+      buildResultCards(status.outputs as Partial<EnergyPlusOutputs>),
     );
     return;
   }
   // Non-success terminal state — render the error message(s).
-  statusEl.textContent = `Run failed: ${status.status}.`;
-  statusEl.style.color = "#dc2626";
+  setStatus(`Run failed: ${status.status}.`, "#dc2626");
   const messages = status.messages ?? [];
   const errorBox = document.createElement("div");
   errorBox.style.cssText = `
@@ -586,10 +680,7 @@ function renderTerminalResult(
   resultsEl.replaceChildren(errorBox);
 }
 
-function buildResultCards(
-  outputs: Partial<EnergyPlusOutputs>,
-  helpers: MountHelpers,
-): HTMLDivElement {
+function buildResultCards(outputs: Partial<EnergyPlusOutputs>): HTMLDivElement {
   const grid = document.createElement("div");
   grid.style.cssText = `
     display: grid;
@@ -614,11 +705,11 @@ function buildResultCards(
       font-size: 14px;
       color: #374151;
     `;
-    // Use textContent (never innerHTML) for safety, per ADR-0014's
-    // helpers.escape rationale. helpers.escape isn't strictly needed
-    // for textContent (the DOM API itself escapes), but we keep the
-    // habit explicit so a future ``innerHTML`` use isn't a footgun.
-    notesCard.textContent = helpers.escape(outputs.notes);
+    // textContent (never innerHTML), so the DOM escapes for us — assign
+    // the RAW string. Running it through helpers.escape here would
+    // double-escape: a note like "U < 2.0" would render as the literal
+    // "U &lt; 2.0". Reserve helpers.escape for innerHTML sinks only.
+    notesCard.textContent = outputs.notes;
     grid.append(notesCard);
   }
 
@@ -655,7 +746,7 @@ function buildValueCard(
   return card;
 }
 
-function buildUnavailableNotice(helpers: MountHelpers): HTMLDivElement {
+function buildUnavailableNotice(): HTMLDivElement {
   const box = document.createElement("div");
   box.style.cssText = `
     background: #fef3c7;
@@ -664,9 +755,10 @@ function buildUnavailableNotice(helpers: MountHelpers): HTMLDivElement {
     border-radius: 6px;
     color: #92400e;
   `;
-  box.textContent = helpers.escape(
-    "This InteractiveTask is no longer available. The instructor may have deactivated it; check back later or contact your instructor.",
-  );
+  // Static, special-char-free copy assigned via textContent — no escape
+  // needed (and escaping here would double-encode any future entities).
+  box.textContent =
+    "This InteractiveTask is no longer available. The instructor may have deactivated it; check back later or contact your instructor.";
   return box;
 }
 

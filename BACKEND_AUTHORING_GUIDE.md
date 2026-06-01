@@ -3,7 +3,7 @@
 The deep reference for building a new InteractiveTask end-to-end.
 Read [`README.md`](README.md) first for the big picture, [`CONTRIBUTING.md`](CONTRIBUTING.md) for the mechanics checklist, and this guide when you're ready to actually write code.
 
-The authoritative framework spec is [ADR-0014](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0014-interactive-task-framework.md). This guide is the author-facing companion: same model, more worked examples, fewer formal definitions.
+This guide is the author-facing reference for the InteractiveTask framework: the manifest schema, the three contract edges, the configuration layers, and the lifecycle — with worked examples throughout.
 
 ---
 
@@ -90,15 +90,29 @@ PureLMS sees four touchpoints when a learner submits a run:
 │  2. LMS atomically: creates SimulationRun row → debits credits →   │
 │     enqueues dispatch (or runs sync container directly)            │
 │     ↓                                                              │
-│  3. Container reads $PURELMS_INPUT_DIR/input.json,                 │
-│     does the work, writes $PURELMS_OUTPUT_DIR/output.json          │
+│  3. Container reads the input envelope, does the work, writes the  │
+│     output envelope. Local (sync): $PURELMS_INPUT_DIR/input.json → │
+│     $PURELMS_OUTPUT_DIR/output.json. Async (Cloud Run/GCS): the    │
+│     gs:// URIs in $PURELMS_INPUT_URI / $PURELMS_OUTPUT_URI, plus a  │
+│     /complete callback to the worker.                              │
 │     ↓                                                              │
-│  4. LMS reads output.json, marks the run terminal,                 │
+│  4. LMS reads the output envelope, marks the run terminal,         │
 │     frontend's pollStatus async-iterator yields the result         │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-That's it. No databases the container writes to. No shared state. No callbacks to the LMS during execution (those are reserved for v2 async backends).
+That's it. No databases the container writes to. No shared state.
+
+**You don't write that I/O or the callbacks by hand** — the shared
+`purelms_itask_runtime` helper (in `_shared_backends/`) abstracts the
+local-dir-vs-GCS-URI split and the progress/`complete` worker callbacks,
+so the same container satisfies the contract on both the local
+DockerCompose path and the async Cloud Run Jobs path with no
+mode-branching. Copy `_template/backend/main.py` — it wires
+`RuntimeLocation` / `read_input_envelope` / `make_progress_reporter` /
+`write_output_envelope`. The hand-rolled `input.json` / `output.json`
+snippets later in this guide show the envelope *shapes* the helper reads
+and writes; you normally call the helper rather than reproducing them.
 
 ---
 
@@ -149,7 +163,7 @@ backend:
 | Field | Purpose | Validation |
 |---|---|---|
 | `image` | Container image URI. **Optional.** If absent, the installer derives `<registry>/purelms-itask-<slug-with-hyphens>:<version>` using the `--registry` flag's value. Set this explicitly only when your registry has an unusual layout. | Free-form string |
-| `credit_cost` | Compute credits debited per submission (per [ADR-0011](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0011-pricing-model.md)). Refunded on `FAILED_RUNTIME`; kept on `FAILED_SIMULATION`. Zero means free runs. | Non-negative integer |
+| `credit_cost` | Compute credits debited per submission. Refunded on `FAILED_RUNTIME`; kept on `FAILED_SIMULATION`. Zero means free runs. | Non-negative integer |
 | `trust_tier` | Friendly form. Mapped at install time to `SimulationTrustTier` enum: `platform` → `TIER_1_PLATFORM`, `verified` → `TIER_2_VERIFIED`, `community` → `TIER_3_COMMUNITY`. Drives whether evidence can flow into credentials. See [Trust tiers](#trust-tiers--execution-mode) below. | One of the three values |
 | `execution_mode` | v1 accepts ONLY `"sync"`. `"async"` returns an install error. Async streaming backends are Slice 4 work. | `"sync"` |
 | `default_timeout_seconds` | Wall-clock budget per run. Container is hard-killed after this. | Positive integer |
@@ -269,7 +283,7 @@ lms_context_used:
   # - unit_block_id
 ```
 
-The v1 allowed set is exactly these seven fields (matches `purelms_shared.envelopes.SimulationInputEnvelope`). The installer rejects unknown field names with a clear error pointing at ADR-0014 §`lms_context_used`. **Declaring more than you actually use isn't wrong**, just noisy; declaring less is fine too (your container still receives the full envelope — `lms_context_used` is documentation, not a filter).
+The v1 allowed set is exactly these seven fields (matches `purelms_shared.envelopes.SimulationInputEnvelope`). The installer rejects unknown field names with a clear error. **Declaring more than you actually use isn't wrong**, just noisy; declaring less is fine too (your container still receives the full envelope — `lms_context_used` is documentation, not a filter).
 
 ### `lms_outcomes` — outcome-mapping rules
 
@@ -344,27 +358,47 @@ The `echo` task ships almost exactly this manifest; it's a useful diff base.
 
 ## The backend container contract
 
+> **Use the runtime helper — don't hand-roll this.** Everything in this
+> section (envelope read, output write, callbacks, exit codes) is
+> provided by `purelms_itask_runtime`: `RuntimeLocation.from_env()` →
+> `read_input_envelope()` → your domain work → `write_output_envelope()`,
+> with `make_progress_reporter()` for mid-run progress. Copy
+> `_template/backend/main.py`. The code + envelope snippets below are
+> **shape references** — they show *what* the helper reads/writes (and
+> the env contract it follows) so you understand the wire format, not
+> code you should reproduce by hand. Hand-rolling local-dir I/O (as the
+> snippets literally show) silently breaks the async Cloud Run / GCS
+> path, which reads/writes `gs://` URIs and posts a `/complete` callback.
+
 ### Three touchpoints, one contract
 
-Every InteractiveTask backend follows the same three-step pattern:
+Every InteractiveTask backend follows the same three-step pattern (the
+helper does each step in the right mode — local dir vs GCS URI):
 
-1. **Read** `SimulationInputEnvelope` from `$PURELMS_INPUT_DIR/input.json`
-2. **Do** the domain work
-3. **Write** `SimulationOutputEnvelope` to `$PURELMS_OUTPUT_DIR/output.json` and exit 0
+1. **Read** the `SimulationInputEnvelope` — `read_input_envelope(location)`
+   (from `$PURELMS_INPUT_URI` on the async path, else
+   `$PURELMS_INPUT_DIR/input.json`).
+2. **Do** the domain work.
+3. **Write** the `SimulationOutputEnvelope` + signal completion —
+   `write_output_envelope(location, output, envelope.context)` (to
+   `$PURELMS_OUTPUT_URI` on the async path, else
+   `$PURELMS_OUTPUT_DIR/output.json`; async also POSTs `/complete`).
 
-The LMS treats a missing output file as a contract violation regardless of exit code.
+The LMS treats a missing output as a contract violation regardless of exit code.
 
 ### Environment variables
 
-The container is launched with these envs set:
+The container is launched with these envs set (the helper reads them via
+`RuntimeLocation.from_env()` — you don't read them directly):
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `PURELMS_INPUT_DIR` | `/purelms/input` | Read-only mount with `input.json` + any `InputFile` / `ResourceFile` materializations |
-| `PURELMS_OUTPUT_DIR` | `/purelms/output` | Read-write mount; your container writes `output.json` + any artifacts here |
-| `PURELMS_RUN_ID` | (uuid) | The run's UUID, for log correlation. Not load-bearing — the canonical `run_id` lives inside `input.json`. |
+| `PURELMS_INPUT_DIR` | `/purelms/input` | **Local/sync** read-only mount with `input.json` + any `InputFile` / `ResourceFile` materializations |
+| `PURELMS_OUTPUT_DIR` | `/purelms/output` | **Local/sync** read-write mount; the helper writes `output.json` + artifacts here |
+| `PURELMS_INPUT_URI` / `PURELMS_OUTPUT_URI` | (unset) | **Async/GCS** `gs://` URIs the worker sets on the Cloud Run Jobs path; the helper reads/writes these instead of the dirs (both set together or neither) |
+| `PURELMS_RUN_ID` | (uuid) | The run's UUID, for log correlation. Not load-bearing — the canonical `run_id` lives inside the envelope. |
 
-The defaults are convention; the Dockerfile in `_template/` declares `ENV PURELMS_INPUT_DIR=/purelms/input` etc. so your image self-documents.
+The defaults are convention; the Dockerfile in `_template/` declares `ENV PURELMS_INPUT_DIR=/purelms/input` etc. so your image self-documents. On the async path the worker overrides them with the `gs://` URIs.
 
 ### Reading the input envelope
 
@@ -491,8 +525,14 @@ FROM python:3.13-slim AS builder
 WORKDIR /build
 COPY pyproject.toml ./
 COPY _vendor /vendor/
-RUN pip install --no-cache-dir --find-links /vendor purelms-shared
-RUN pip install --no-cache-dir .
+# Install the shared runtime with its [cloud] extra: pip resolves
+# purelms-itask-runtime + purelms-shared from /vendor and pulls
+# google-cloud-storage / google-auth (GCS I/O + OIDC callbacks) from
+# PyPI, so the SAME image meets the contract on the local DockerCompose
+# AND the async Cloud Run / GCS path. (Installing only purelms-shared,
+# as older templates did, silently breaks the async path.)
+RUN pip install --no-cache-dir --find-links /vendor "purelms-itask-runtime[cloud]"
+RUN pip install --no-cache-dir --find-links /vendor .
 
 FROM python:3.13-slim
 
@@ -519,7 +559,7 @@ ENTRYPOINT ["python", "main.py"]
 
 ### `__metadata__.py` — informational self-description
 
-Per-backend Python file that documents the runtime contract for future drift detection (ADR-0002 open question 1). Currently informational only — the LMS doesn't read it at runtime. Keep it in sync with the manifest so when registration-time introspection lands (Slice 4) your backend is ready.
+Per-backend Python file that documents the runtime contract for future drift detection. Currently informational only — the LMS doesn't read it at runtime. Keep it in sync with the manifest so when registration-time introspection lands (Slice 4) your backend is ready.
 
 ```python
 BACKEND_TYPE = "ENERGYPLUS"
@@ -717,7 +757,7 @@ PureLMS layers configuration at three points:
 
 3. **Layer 3 — Submission** (`SimulationRun.parameters`): the learner's actual values at submission time. *Eventually* validated against L1 ∩ L2 by the LMS before your container sees them.
 
-**Validation (all three layers enforced as of Slice 3e, 2026-05-29):** the LMS validates **L1 at install** (manifest schema, parameter types, lms_outcomes references), **L2 ↔ L1 at block edit/import** (a course author can no longer save an `interaction_details` config that widens past or references parameters outside your manifest — `InteractiveTaskBlock.clean()` + the importer serializer reject it), and **L3 ↔ L1 ∩ L2 at submit, before the credit debit** (`submit_simulation_run` rejects out-of-bounds / wrong-type / bad-enum / unknown / missing-required submissions and rolls back with no charge). One exception: an **open-schema** backend (`parameters: []`, like `echo`) accepts arbitrary parameters by design and skips L2/L3. See [ADR-0014 §Validation](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0014-interactive-task-framework.md). **What this means for you as an author:** declare accurate `min`/`max`/`choices`/`required` in your manifest — those bounds are now enforced end-to-end. Keep your backend's parameter helpers as defense-in-depth (and the FAILED_RUNTIME refund remains the safety net for open-schema tasks), but you no longer have to rely on them as the *only* guard.
+**Validation (all three layers enforced as of Slice 3e, 2026-05-29):** the LMS validates **L1 at install** (manifest schema, parameter types, lms_outcomes references), **L2 ↔ L1 at block edit/import** (a course author can no longer save an `interaction_details` config that widens past or references parameters outside your manifest — `InteractiveTaskBlock.clean()` + the importer serializer reject it), and **L3 ↔ L1 ∩ L2 at submit, before the credit debit** (`submit_simulation_run` rejects out-of-bounds / wrong-type / bad-enum / unknown / missing-required submissions and rolls back with no charge). One exception: an **open-schema** backend (`parameters: []`, like `echo`) accepts arbitrary parameters by design and skips L2/L3. **What this means for you as an author:** declare accurate `min`/`max`/`choices`/`required` in your manifest — those bounds are now enforced end-to-end. Keep your backend's parameter helpers as defense-in-depth (and the FAILED_RUNTIME refund remains the safety net for open-schema tasks), but you no longer have to rely on them as the *only* guard.
 
 Concrete example. Manifest declares:
 
@@ -763,7 +803,7 @@ The frontend bundle should:
 
 ## Installation + lifecycle commands
 
-Four management commands drive an InteractiveTask's lifecycle (per ADR-0014 §Installation mechanics). All live in `purelms` and are invoked from a PureLMS checkout.
+Four management commands drive an InteractiveTask's lifecycle. All live in `purelms` and are invoked from a PureLMS checkout.
 
 ### `install_interactive_task`
 
@@ -827,7 +867,7 @@ Hard-deletes registration row(s). **Blocked** when:
 - Any `SimulationRun` row has a PROTECT FK to the registration (historical evidence)
 - For the active row: any `InteractiveTaskBlock` references the slug
 
-(The flag is `--task-version` rather than `--version` because Django's `BaseCommand` reserves `--version` for printing the Django version. Semantic is identical to ADR-0014's `--version`.)
+(The flag is `--task-version` rather than `--version` because Django's `BaseCommand` reserves `--version` for printing the Django version.)
 
 ---
 
@@ -954,11 +994,14 @@ When promoting from `community` → `verified`, bump the manifest version and re
 
 ### Execution mode
 
-v1 accepts only `execution_mode: sync`. The container blocks the LMS thread (or Cloud Tasks worker) until exit; the LMS reads `output.json` directly.
+The manifest still accepts only `execution_mode: sync` at install (the install command rejects `async`). What that gates is the **manifest-declared per-task async router** — *not* whether async infrastructure exists.
 
-`execution_mode: async` is Slice 4 work. Async backends will POST progress + completion callbacks to the worker; the LMS won't poll the filesystem. When the v2 envelope ships, your manifest will be able to declare `async` and your container will be expected to call `purelms_shared.callbacks.ProgressCallback` / `CompleteCallback`.
+Two things are easy to conflate:
 
-For v1, just ship `sync` and design your container to fit inside `default_timeout_seconds`. EnergyPlus single-zone (~30s annual run) is the upper end of comfortable sync. Anything longer should wait for async.
+- **The async deployment path has shipped.** On a Cloud Run Jobs deploy the worker stages the envelope to GCS, launches the container with `PURELMS_INPUT_URI` / `PURELMS_OUTPUT_URI`, and waits for the `/complete` callback — and `purelms_itask_runtime` (which the template + every backend already use) handles the GCS I/O + the progress/`complete` callbacks for you. So your container is *already* async-ready; you don't write callback code.
+- **What's still future** is letting a *manifest* declare `execution_mode: async` so a single deployment routes some tasks sync and others async per their declaration. Until that ships, `sync` is the only accepted manifest value.
+
+For now, ship `sync` and design your container to fit inside `default_timeout_seconds`. EnergyPlus single-zone (~30s annual run) is the upper end of comfortable sync.
 
 ---
 
@@ -1044,14 +1087,23 @@ lms_outcomes: {}
 **Container** (`echo/backend/main.py` — abridged):
 
 ```python
-def main() -> int:
-    input_dir = Path(os.environ.get("PURELMS_INPUT_DIR", "/purelms/input"))
-    output_dir = Path(os.environ.get("PURELMS_OUTPUT_DIR", "/purelms/output"))
+from purelms_itask_runtime import RuntimeLocation
+from purelms_itask_runtime import read_input_envelope
+from purelms_itask_runtime import write_output_envelope
 
-    # 1. Read input envelope.
-    envelope = SimulationInputEnvelope.model_validate_json(
-        (input_dir / "input.json").read_text(),
-    )
+
+def main() -> int:
+    # RuntimeLocation resolves local-dir vs GCS-URI I/O from the
+    # environment — the backend never branches on the execution mode.
+    location = RuntimeLocation.from_env()
+
+    # 1. Read + parse the input envelope. A missing / invalid
+    # envelope is a contract violation → exit 1.
+    try:
+        envelope = read_input_envelope(location)
+    except Exception as exc:
+        print(f"echo: could not read input envelope: {exc}", file=sys.stderr)
+        return 1
 
     # 2. Do the "work" — just echo.
     output = SimulationOutputEnvelope(
@@ -1070,9 +1122,9 @@ def main() -> int:
         runtime_seconds=0.0,
     )
 
-    # 3. Write output envelope.
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "output.json").write_text(output.model_dump_json(indent=2))
+    # 3. Write the output envelope (local dir or GCS URI) + signal
+    # completion to the worker on the async path.
+    write_output_envelope(location, output, envelope.context)
     return 0
 ```
 
@@ -1142,11 +1194,6 @@ SIMULATION_EXECUTION_BACKEND=docker_compose uv run python manage.py runserver
 
 ## Further reading
 
-- **[ADR-0014](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0014-interactive-task-framework.md)** — the framework spec. Authoritative for the manifest schema, install behavior table, lifecycle phases, versioning invariants.
-- **[Simulation Backend Contract](https://github.com/danielmcquillen/purelms-project/blob/main/docs/architecture/simulation-backend-contract.md)** — maintainer-facing reference for the contracts between PureLMS and InteractiveTask authors.
-- **[Simulation Runtime Protocol](https://github.com/danielmcquillen/purelms-project/blob/main/docs/architecture/simulation-runtime-protocol.md)** — runtime contracts: storage, data model, polling endpoint, callback endpoint.
-- **[Trust Tiers](https://github.com/danielmcquillen/purelms-project/blob/main/docs/architecture/simulation-backend-trust-tiers.md)** — the three tiers in depth.
-- **[Run-Scoped Isolation](https://github.com/danielmcquillen/purelms-project/blob/main/docs/architecture/run-scoped-isolation.md)** — container sandbox policy.
 - **`purelms-shared`** — [the Pydantic envelope schemas](https://github.com/danielmcquillen/purelms-shared) (`SimulationInputEnvelope`, `SimulationOutputEnvelope`, etc.). The MIT-licensed contract package between LMS and containers.
 - **`echo/`** — this repo's canonical reference InteractiveTask. Copy patterns from here; it's intentionally minimal.
 

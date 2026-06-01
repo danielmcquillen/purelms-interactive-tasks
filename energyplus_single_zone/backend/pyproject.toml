@@ -1,6 +1,6 @@
 [project]
 name = "purelms-itask-energyplus-single-zone"
-version = "0.2.1"
+version = "0.2.2"
 description = "EnergyPlus single-zone InteractiveTask backend — real EnergyPlus (IDF template + bundled binary + eplusout.sql extraction) with a pure-Python analytical fallback for binary-free dev/CI"
 requires-python = ">=3.10"
 license = "MIT"
@@ -11,9 +11,13 @@ dependencies = [
     # No scientific Python deps: the real path shells out to the bundled
     # EnergyPlus binary (vendored in the Dockerfile) and parses
     # eplusout.sql with the stdlib ``sqlite3``. IDF generation is a
-    # ``string.Template`` substitution. The only dependency is the
-    # envelope schema.
+    # ``string.Template`` substitution.
     "purelms-shared>=0.4.0",
+    # Shared backend runtime: local-dir vs GCS envelope I/O + the
+    # progress/complete worker callbacks. Workspace member (not on
+    # PyPI), resolved via [tool.uv.sources] below; the image installs
+    # its vendored wheel with the [cloud] extra (see the Dockerfile).
+    "purelms-itask-runtime",
 ]
 
 [project.optional-dependencies]
@@ -23,7 +27,10 @@ dev = [
 
 # purelms-shared is published to PyPI; the ``>=0.4.0`` floor-pin in
 # ``dependencies`` above is the source of truth (audit P0-2 closed —
-# the editable sibling-path override is gone).
+# the editable sibling-path override is gone). purelms-itask-runtime is
+# an in-repo workspace member, so it resolves from the workspace.
+[tool.uv.sources]
+purelms-itask-runtime = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

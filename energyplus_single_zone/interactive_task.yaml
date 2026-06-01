@@ -13,15 +13,16 @@
 # paths return identical output keys; the ``notes`` string says which ran.
 #
 # Bumped 0.1.0 → 0.2.0 (real EnergyPlus) → 0.2.1 (lms_outcomes grading
-# rule). Re-install with ``--replace-active`` (ADR-0014 single-active-
-# version invariant). 0.2.1 changes only the persisted manifest (the
-# grading rule); the container image is unchanged.
+# rule) → 0.2.2 (frontend.reports_progress capability flag). Re-install
+# with ``--replace-active`` (single-active-version invariant). 0.2.1 and
+# 0.2.2 change only the persisted manifest (the grading rule and the
+# progress declaration, respectively); the container image is unchanged.
 
 schema_version: "purelms.interactive_task.v1"
 
 slug: energyplus_single_zone
 name: EnergyPlus Single-Zone
-version: 0.2.1
+version: 0.2.2
 description: |
   Single-zone building-energy InteractiveTask. The learner picks a
   glazing U-value, window area, and climate zone; the backend
@@ -37,7 +38,7 @@ description: |
 
 backend:
   # Image name derives from slug by ``s/_/-/g`` →
-  # ``purelms-itask-energyplus-single-zone:0.2.0`` (per ADR-0014).
+  # ``purelms-itask-energyplus-single-zone:0.2.0``.
   # Local builds via ``just build energyplus_single_zone`` tag with
   # ``:dev``; production deploys push to a registry with the
   # version tag.
@@ -49,9 +50,17 @@ backend:
 
 frontend:
   # Built via ``just frontend-build energyplus_single_zone`` to
-  # ``frontend/dist/energyplus_single_zone.js``. Phase C.2 lands
-  # the Angular bundle that mounts this filename.
+  # ``frontend/dist/energyplus_single_zone.js`` — a vanilla
+  # TypeScript + Three.js bundle that mounts this filename.
   bundle: energyplus_single_zone.js
+  # Declares that this backend emits intermediate progress (the
+  # runner reports phase progress via the worker's progress
+  # callback). The LMS surfaces this to the dispatcher, which picks
+  # a determinate progress bar over an indeterminate one. Only
+  # observable on async deployments: a synchronous run blocks the
+  # submit request until done, so the browser still sees an
+  # indeterminate bar locally regardless of this flag.
+  reports_progress: true
 
 # Layer 1 parameter schema. Course authors tighten or hide
 # individual parameters at Layer 2 on the InteractiveTaskBlock.
@@ -134,10 +143,9 @@ outputs:
     description: Human-readable summary of the simulation result.
     display_hint: alert
 
-# Standard envelope context fields this backend reads. The stubbed
-# v1 actually only uses ``run_id`` for log correlation, but we
-# declare the full identification triple so a future
-# real-EnergyPlus version that wants to log "who ran what when"
+# Standard envelope context fields this backend reads. The backend
+# uses ``run_id`` for log correlation; the full identification
+# triple is declared so a version that logs "who ran what when"
 # already has the declaration in place.
 lms_context_used:
   - run_id
@@ -146,7 +154,7 @@ lms_context_used:
 
 requires_user_context: false
 
-# lms_outcomes (ADR-0014 §Category 4) — the LMS-side evaluator (Slice 3e)
+# lms_outcomes — the LMS-side evaluator (Slice 3e)
 # reads these rules from the persisted manifest at completion and maps the
 # backend's outputs onto the grade book's (passed, score) fields.
 #

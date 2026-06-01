@@ -2,7 +2,7 @@
   "name": "@purelms-interactive-tasks/echo-frontend",
   "version": "0.1.0",
   "private": true,
-  "description": "Echo InteractiveTask frontend bundle — the LMS-side integration-test fixture (per ADR-0014).",
+  "description": "Echo InteractiveTask frontend bundle — the LMS-side integration-test fixture.",
   "license": "MIT",
   "type": "module",
   "scripts": {

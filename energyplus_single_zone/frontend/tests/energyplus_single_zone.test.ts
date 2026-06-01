@@ -11,7 +11,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { mount } from "../src/energyplus_single_zone";
-import type { MountHelpers, SubmissionOutcomeResponse } from "../src/types";
+import type {
+  MountHelpers,
+  ProgressBarController,
+  SubmissionOutcomeResponse,
+} from "../src/types";
 
 // ---------------------------------------------------------------------
 // Helpers
@@ -34,6 +38,12 @@ function makeHelpers(
     },
     escape: (v: string) =>
       v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"),
+    // Thread an optional ``ui`` through so progress-bar tests can
+    // inject a recording controller. OMITTED (not set to undefined)
+    // when not supplied — ``exactOptionalPropertyTypes`` forbids an
+    // explicit ``undefined`` on an optional field, and omission is
+    // what keeps the other tests on the no-bar fallback path anyway.
+    ...(overrides.ui ? { ui: overrides.ui } : {}),
     meta: {
       bundle: "energyplus_single_zone.js",
       unitBlockId: 42,
@@ -42,6 +52,34 @@ function makeHelpers(
       ...overrides.meta,
     },
   };
+}
+
+/**
+ * A :class:`ProgressBarController` that records every mode call so a
+ * test can assert the bar-decision matrix (indeterminate vs.
+ * determinate vs. terminal). The real bar's DOM behavior is tested
+ * separately in the LMS; here we only care about which method the
+ * widget chose to call.
+ */
+interface RecordingBar {
+  controller: ProgressBarController;
+  calls: Array<{ mode: string; args: unknown[] }>;
+}
+
+function makeRecordingBar(): RecordingBar {
+  const calls: Array<{ mode: string; args: unknown[] }> = [];
+  const record = (mode: string) => (...args: unknown[]) => {
+    calls.push({ mode, args });
+  };
+  const controller: ProgressBarController = {
+    element: document.createElement("div"),
+    indeterminate: record("indeterminate"),
+    determinate: record("determinate"),
+    complete: record("complete"),
+    error: record("error"),
+    remove: record("remove"),
+  };
+  return { controller, calls };
 }
 
 // happy-dom doesn't provide a WebGL context, so every test hits the
@@ -311,6 +349,51 @@ describe("mount() — submission", () => {
     expect(results!.textContent).toContain("test notes");
   });
 
+  it("renders notes verbatim — no HTML double-escaping", async () => {
+    // Regression: notes were assigned via `helpers.escape(...)` into
+    // `textContent`, which double-encodes — "U < 2" rendered as the
+    // literal "U &lt; 2". textContent already escapes; assign raw.
+    const element = document.createElement("div");
+    const submit = vi.fn(
+      async (): Promise<SubmissionOutcomeResponse> => ({
+        attempt: null,
+        run: { id: "run-esc", status: "running", status_url: "", poll_interval_seconds: 1 },
+        is_complete: false,
+      }),
+    );
+    const pollStatus = async function* () {
+      yield {
+        id: "run-esc",
+        status: "success",
+        progress_pct: 100,
+        progress_step: "done",
+        is_terminal: true,
+        completed_at: "2026-05-24T00:00:00Z",
+        runtime_seconds: 0.4,
+        outputs: {
+          annual_heating_kWh: 1650,
+          annual_cooling_kWh: 240,
+          peak_heating_kW: 0.4,
+          notes: "Analytical model: U < 2.0 & A > 5 m²",
+        },
+        messages: [],
+      };
+    };
+
+    await mount(element, {}, makeHelpers({ api: { submit, pollStatus } }));
+
+    const form = element.querySelector("form")!;
+    form.dispatchEvent(new Event("submit", { cancelable: true }));
+    await new Promise((r) => setTimeout(r, 10));
+
+    const results = element.querySelector(".purelms-task-results")!;
+    // Raw characters survive...
+    expect(results.textContent).toContain("U < 2.0 & A > 5 m²");
+    // ...and the HTML-entity forms (what double-escaping produces) do not.
+    expect(results.textContent).not.toContain("&lt;");
+    expect(results.textContent).not.toContain("&amp;");
+  });
+
   it("renders an error box on terminal failure", async () => {
     const element = document.createElement("div");
     const submit = vi.fn(
@@ -380,6 +463,302 @@ describe("mount() — submission", () => {
     const status = element.querySelector(".purelms-task-status");
     expect(status?.textContent).toContain("Submission failed");
     expect(status?.textContent).toContain("network down");
+  });
+});
+
+// ---------------------------------------------------------------------
+// Progress bar — the indeterminate/determinate decision matrix
+// ---------------------------------------------------------------------
+
+describe("mount() — progress bar", () => {
+  function submitAndSettle(element: HTMLElement) {
+    const form = element.querySelector("form")!;
+    form.dispatchEvent(new Event("submit", { cancelable: true }));
+    return new Promise((r) => setTimeout(r, 10));
+  }
+
+  it("uses a DETERMINATE bar on the async path when reportsProgress is true", async () => {
+    const element = document.createElement("div");
+    const bar = makeRecordingBar();
+    const submit = vi.fn(
+      async (): Promise<SubmissionOutcomeResponse> => ({
+        attempt: null,
+        run: { id: "run-async", status: "running", status_url: "", poll_interval_seconds: 1 },
+        is_complete: false,
+      }),
+    );
+    const pollStatus = async function* () {
+      yield {
+        id: "run-async",
+        status: "running",
+        progress_pct: 55,
+        progress_step: "Running EnergyPlus",
+        is_terminal: false,
+        completed_at: null,
+        runtime_seconds: null,
+        outputs: {},
+        messages: [],
+      };
+      yield {
+        id: "run-async",
+        status: "success",
+        progress_pct: 100,
+        progress_step: "Complete",
+        is_terminal: true,
+        completed_at: "2026-05-24T00:00:00Z",
+        runtime_seconds: 0.42,
+        outputs: {
+          annual_heating_kWh: 1650.0,
+          annual_cooling_kWh: 240.0,
+          peak_heating_kW: 0.4,
+          notes: "ok",
+        },
+        messages: [],
+      };
+    };
+
+    await mount(
+      element,
+      {},
+      makeHelpers({
+        api: { submit, pollStatus },
+        ui: { createProgressBar: () => bar.controller },
+        meta: { ...makeHelpers().meta, reportsProgress: true },
+      }),
+    );
+
+    await submitAndSettle(element);
+
+    const modes = bar.calls.map((c) => c.mode);
+    // The in-flight poll drove a determinate update with the polled pct.
+    expect(bar.calls).toContainEqual({
+      mode: "determinate",
+      args: [55, "Running EnergyPlus"],
+    });
+    // Terminal success → solid green complete bar; never an error.
+    expect(modes).toContain("complete");
+    expect(modes).not.toContain("error");
+  });
+
+  it("stays INDETERMINATE on the async path when reportsProgress is absent", async () => {
+    const element = document.createElement("div");
+    const bar = makeRecordingBar();
+    const submit = vi.fn(
+      async (): Promise<SubmissionOutcomeResponse> => ({
+        attempt: null,
+        run: { id: "run-noprog", status: "running", status_url: "", poll_interval_seconds: 1 },
+        is_complete: false,
+      }),
+    );
+    const pollStatus = async function* () {
+      yield {
+        id: "run-noprog",
+        status: "running",
+        progress_pct: 55,
+        progress_step: "halfway",
+        is_terminal: false,
+        completed_at: null,
+        runtime_seconds: null,
+        outputs: {},
+        messages: [],
+      };
+      yield {
+        id: "run-noprog",
+        status: "success",
+        progress_pct: 100,
+        progress_step: "done",
+        is_terminal: true,
+        completed_at: "2026-05-24T00:00:00Z",
+        runtime_seconds: 0.4,
+        outputs: { annual_heating_kWh: 1650, annual_cooling_kWh: 240, peak_heating_kW: 0.4, notes: "ok" },
+        messages: [],
+      };
+    };
+
+    await mount(
+      element,
+      {},
+      // No reportsProgress in meta — the bundle treats absent as false.
+      makeHelpers({ api: { submit, pollStatus }, ui: { createProgressBar: () => bar.controller } }),
+    );
+
+    await submitAndSettle(element);
+
+    const modes = bar.calls.map((c) => c.mode);
+    // Never a determinate call — the polled progress_pct is ignored.
+    expect(modes).not.toContain("determinate");
+    expect(modes).toContain("indeterminate");
+    expect(modes).toContain("complete");
+  });
+
+  it("stays INDETERMINATE on the sync path even when reportsProgress is true", async () => {
+    // The load-bearing rule: determinate needs BOTH the capability AND
+    // an async run. A blocking sync request has no observable midpoint,
+    // so a declared-progress backend still gets an indeterminate bar.
+    const element = document.createElement("div");
+    const bar = makeRecordingBar();
+    const submit = vi.fn(
+      async (): Promise<SubmissionOutcomeResponse> => ({
+        attempt: null,
+        run: { id: "run-sync", status: "success", status_url: "", poll_interval_seconds: 1 },
+        is_complete: true,
+      }),
+    );
+    const pollStatus = async function* () {
+      yield {
+        id: "run-sync",
+        status: "success",
+        progress_pct: 100,
+        progress_step: "done",
+        is_terminal: true,
+        completed_at: "2026-05-24T00:00:00Z",
+        runtime_seconds: 0.42,
+        outputs: { annual_heating_kWh: 1650, annual_cooling_kWh: 240, peak_heating_kW: 0.4, notes: "ok" },
+        messages: [],
+      };
+    };
+
+    await mount(
+      element,
+      {},
+      makeHelpers({
+        api: { submit, pollStatus },
+        ui: { createProgressBar: () => bar.controller },
+        meta: { ...makeHelpers().meta, reportsProgress: true },
+      }),
+    );
+
+    await submitAndSettle(element);
+
+    const modes = bar.calls.map((c) => c.mode);
+    expect(modes).not.toContain("determinate");
+    expect(modes).toContain("indeterminate");
+    expect(modes).toContain("complete");
+  });
+
+  it("drives the bar to ERROR on a submission failure", async () => {
+    const element = document.createElement("div");
+    const bar = makeRecordingBar();
+    const submit = vi.fn(async () => {
+      throw new Error("network down");
+    });
+
+    await mount(
+      element,
+      {},
+      makeHelpers({
+        api: {
+          submit,
+          pollStatus: async function* () {
+            throw new Error("should not be called");
+          },
+        },
+        ui: { createProgressBar: () => bar.controller },
+      }),
+    );
+
+    await submitAndSettle(element);
+
+    const modes = bar.calls.map((c) => c.mode);
+    expect(modes).toContain("error");
+    expect(modes).not.toContain("complete");
+  });
+
+  it("works without helpers.ui (older dispatcher) — falls back to the text status", async () => {
+    const element = document.createElement("div");
+    const submit = vi.fn(
+      async (): Promise<SubmissionOutcomeResponse> => ({
+        attempt: null,
+        run: { id: "run-old", status: "running", status_url: "", poll_interval_seconds: 1 },
+        is_complete: false,
+      }),
+    );
+    const pollStatus = async function* () {
+      yield {
+        id: "run-old",
+        status: "success",
+        progress_pct: 100,
+        progress_step: "done",
+        is_terminal: true,
+        completed_at: "2026-05-24T00:00:00Z",
+        runtime_seconds: 0.4,
+        outputs: { annual_heating_kWh: 1650, annual_cooling_kWh: 240, peak_heating_kW: 0.4, notes: "ok" },
+        messages: [],
+      };
+    };
+
+    // No ``ui`` supplied → helpers.ui is undefined → bar is null.
+    await mount(element, {}, makeHelpers({ api: { submit, pollStatus } }));
+
+    await submitAndSettle(element);
+
+    // Still renders the terminal result via the text/status fallback.
+    const results = element.querySelector(".purelms-task-results");
+    expect(results).not.toBeNull();
+    expect(results!.textContent).toContain("1,650");
+  });
+
+  it("does NOT duplicate status text — the standalone line is hidden when a bar is present", async () => {
+    // Regression: the bundle used to write every status string to BOTH
+    // its own text line and the bar's caption, so "Submitting…" (etc.)
+    // showed — and was announced — twice. With a bar present the bar's
+    // aria-live caption is the single status surface; the text line is
+    // hidden + empty.
+    const element = document.createElement("div");
+    const bar = makeRecordingBar();
+    const submit = vi.fn(
+      async (): Promise<SubmissionOutcomeResponse> => ({
+        attempt: null,
+        run: { id: "run-dup", status: "running", status_url: "", poll_interval_seconds: 1 },
+        is_complete: false,
+      }),
+    );
+    const pollStatus = async function* () {
+      yield {
+        id: "run-dup",
+        status: "running",
+        progress_pct: 40,
+        progress_step: "Running EnergyPlus",
+        is_terminal: false,
+        completed_at: null,
+        runtime_seconds: null,
+        outputs: {},
+        messages: [],
+      };
+      yield {
+        id: "run-dup",
+        status: "success",
+        progress_pct: 100,
+        progress_step: "Complete",
+        is_terminal: true,
+        completed_at: "2026-05-24T00:00:00Z",
+        runtime_seconds: 0.42,
+        outputs: { annual_heating_kWh: 1650, annual_cooling_kWh: 240, peak_heating_kW: 0.4, notes: "ok" },
+        messages: [],
+      };
+    };
+
+    await mount(
+      element,
+      {},
+      makeHelpers({
+        api: { submit, pollStatus },
+        ui: { createProgressBar: () => bar.controller },
+        meta: { ...makeHelpers().meta, reportsProgress: true },
+      }),
+    );
+
+    await submitAndSettle(element);
+
+    // The bar drove the status (its caption carries the step text)...
+    expect(bar.calls.length).toBeGreaterThan(0);
+    // ...and the standalone text line is hidden + empty, so nothing is
+    // shown or announced twice.
+    const statusLine = element.querySelector<HTMLElement>(".purelms-task-status")!;
+    expect(statusLine.style.display).toBe("none");
+    expect(statusLine.textContent).toBe("");
+    // The result still renders (proves completion ran through the bar path).
+    expect(element.querySelector(".purelms-task-results")?.textContent).toContain("1,650");
   });
 });
 

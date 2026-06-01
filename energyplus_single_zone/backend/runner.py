@@ -52,6 +52,7 @@ import sqlite3
 import string
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,23 @@ from climate import ClimateZone
 from climate import get_climate_zone
 
 logger = logging.getLogger(__name__)
+
+# A progress reporter: ``on_progress(pct, step)`` where ``pct`` is
+# 0-100 and ``step`` is a short human label. ``simulate`` calls it at
+# phase boundaries; ``main.py`` wires it to the worker's progress
+# callback so async deployments drive a determinate progress bar.
+#
+# Planned direction: progress is expected to eventually carry not just
+# a percent + label but renderable partial VALUES (interim outputs the
+# frontend can show mid-run). When that lands in the shared
+# ``ProgressCallback`` body, this signature grows a third (optional)
+# argument; today it is progress-only.
+ProgressFn = Callable[[int, str], None]
+
+
+def _noop_progress(pct: int, step: str) -> None:
+    """Default reporter — does nothing. Lets callers omit ``on_progress``."""
+
 
 # The window's fixed height (m). ``build_idf`` derives the window LENGTH
 # from the learner's area (area / height) so the area parameter maps onto
@@ -102,7 +120,11 @@ _PEAK_HEATING_VARIABLE = "Zone Ideal Loads Supply Air Sensible Heating Rate"
 # ---------------------------------------------------------------------
 
 
-def simulate(parameters: dict[str, Any]) -> dict[str, Any]:
+def simulate(
+    parameters: dict[str, Any],
+    *,
+    on_progress: ProgressFn | None = None,
+) -> dict[str, Any]:
     """Run the single-zone simulation; return the manifest's outputs dict.
 
     Pure-ish orchestration: validates parameters, selects the execution
@@ -117,6 +139,14 @@ def simulate(parameters: dict[str, Any]) -> dict[str, Any]:
             - ``window_area`` (float, m²)
             - ``climate_zone`` (str, one of ``CLIMATE_ZONES``)
 
+        on_progress: Optional reporter called at phase boundaries with
+            ``(pct, step)``. Omit it (the default) for a silent run —
+            the CI/analytical/local paths pass nothing. ``main.py``
+            wires it to the worker's progress callback so async
+            deployments surface a determinate progress bar. The
+            analytical path is effectively instantaneous, so it only
+            emits the bookend phases.
+
     Returns:
         Dict whose keys match the manifest's ``outputs[].name`` exactly:
         ``annual_heating_kWh``, ``annual_cooling_kWh``,
@@ -128,11 +158,13 @@ def simulate(parameters: dict[str, Any]) -> dict[str, Any]:
         ValueError: A parameter is out of range / unparseable, OR the
             real EnergyPlus run failed (bad weather file, non-zero exit,
             missing SQL output). ``main.py`` maps all three onto a
-            FAILED_RUNTIME envelope (credit refunded per ADR-0011) — the
+            FAILED_RUNTIME envelope — the
             right semantic, since the learner's inputs are already
             L3-validated upstream, so a run failure is a platform/IDF
             problem, not the learner's fault.
     """
+    emit = on_progress if on_progress is not None else _noop_progress
+
     # Validate up front (shared by both modes). ``get_climate_zone``
     # raises ValueError on an unknown zone; the float helpers raise
     # KeyError/ValueError.
@@ -140,12 +172,23 @@ def simulate(parameters: dict[str, Any]) -> dict[str, Any]:
     area = _require_float(parameters, "window_area")
     climate_code = _require_str(parameters, "climate_zone")
     zone = get_climate_zone(climate_code)
+    emit(10, "Parameters validated")
 
     mode = _select_mode()
     logger.info("simulate: mode=%s zone=%s", mode, zone.code)
     if mode == "energyplus":
-        return _simulate_energyplus(u_value=u_value, area=area, zone=zone)
-    return _simulate_analytical(u_value=u_value, area=area, zone=zone)
+        emit(20, "Building EnergyPlus model")
+        result = _simulate_energyplus(
+            u_value=u_value,
+            area=area,
+            zone=zone,
+            on_progress=emit,
+        )
+    else:
+        emit(40, "Running analytical model")
+        result = _simulate_analytical(u_value=u_value, area=area, zone=zone)
+    emit(100, "Complete")
+    return result
 
 
 def _select_mode() -> str:
@@ -174,8 +217,10 @@ def _simulate_energyplus(
     u_value: float,
     area: float,
     zone: ClimateZone,
+    on_progress: ProgressFn | None = None,
 ) -> dict[str, Any]:
     """Build an IDF, run EnergyPlus against the zone's EPW, mine the SQL."""
+    emit = on_progress if on_progress is not None else _noop_progress
     if shutil.which(_ENERGYPLUS_BIN) is None:
         msg = (
             "EnergyPlus binary not found on PATH but PURELMS_EPLUS_MODE "
@@ -200,6 +245,7 @@ def _simulate_energyplus(
     idf_path = work_dir / "in.idf"
     idf_path.write_text(idf_text)
 
+    emit(40, "Running EnergyPlus")
     returncode, _stdout, stderr = _run_energyplus(idf_path, epw_path, work_dir)
 
     err_path = work_dir / "eplusout.err"
@@ -212,6 +258,7 @@ def _simulate_energyplus(
         )
         raise ValueError(msg)
 
+    emit(85, "Extracting results")
     heating_kwh, cooling_kwh, peak_kw = extract_metrics(sql_path)
 
     # Peak fallback: if the sizing/output-variable peak wasn't found in

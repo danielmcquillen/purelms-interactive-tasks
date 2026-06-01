@@ -1,77 +1,82 @@
 """
 TODO: backend container entrypoint for the <your-slug> InteractiveTask.
 
-Per ADR-0014 §runtime contract, every InteractiveTask backend reads a
-SimulationInputEnvelope from ``$PURELMS_INPUT_DIR/input.json``, does
-its domain work, and writes a SimulationOutputEnvelope to
-``$PURELMS_OUTPUT_DIR/output.json``.
+Every InteractiveTask backend reads a SimulationInputEnvelope, does its
+domain work, and writes a SimulationOutputEnvelope. The shared
+``purelms_itask_runtime`` handles the I/O (local dir vs GCS URI) and the
+worker callbacks (progress mid-run + the authoritative ``/complete`` at
+the end), so the SAME container satisfies the contract on BOTH the local
+DockerCompose path and the async Cloud Run Jobs path — with no
+"am I local or cloud?" branching here.
 
-This file is the skeleton. Replace the "TODO: domain work" section
-with your simulation / pipeline / analysis. Everything else (I/O,
-envelope parsing, exit codes) is contract boilerplate.
+This file is the skeleton. Replace the "TODO: domain work" section with
+your simulation / pipeline / analysis. Everything else (envelope I/O,
+progress + completion callbacks, exit codes) is contract boilerplate the
+runtime helper provides.
 """
 
 from __future__ import annotations
 
-import os
 import sys
 import time
-from pathlib import Path
 
+from purelms_itask_runtime import RuntimeLocation
+from purelms_itask_runtime import make_progress_reporter
+from purelms_itask_runtime import read_input_envelope
+from purelms_itask_runtime import write_output_envelope
 from purelms_shared.constants import OutputStatus
 from purelms_shared.envelopes import Message
-from purelms_shared.envelopes import SimulationInputEnvelope
 from purelms_shared.envelopes import SimulationOutputEnvelope
 
 
 def main() -> int:
     """Container entrypoint. Returns the process exit code.
 
-    Three contractual touchpoints (see ADR-0014):
+    Three contractual touchpoints, all mode-agnostic via the runtime helper:
 
-    1. **Input read.** ``$PURELMS_INPUT_DIR/input.json`` MUST exist and
-       parse as ``SimulationInputEnvelope``. If not → exit 1.
-    2. **Domain work.** Replace the TODO block below with your
-       simulation. Output values go into ``outputs={...}`` keyed by
-       the output names declared in ``interactive_task.yaml``.
-    3. **Output write.** ``$PURELMS_OUTPUT_DIR/output.json`` MUST be
-       written before exit 0. The LMS treats a missing file as a
-       contract violation regardless of the exit code.
+    1. **Input read.** ``read_input_envelope`` reads from
+       ``PURELMS_INPUT_URI`` (async/GCS) or ``PURELMS_INPUT_DIR/input.json``
+       (local). A missing / invalid envelope → exit 1.
+    2. **Domain work.** Replace the TODO block. ``envelope.parameters`` is
+       the learner-submitted parameter dict (already validated by the LMS
+       against ``interactive_task.yaml``). Populate ``outputs`` with values
+       matching your manifest's ``outputs:`` block.
+    3. **Output write + completion.** ``write_output_envelope`` writes to
+       ``PURELMS_OUTPUT_URI`` (async/GCS) or ``PURELMS_OUTPUT_DIR/output.json``
+       (local) and, on the async path, POSTs the authoritative
+       ``/complete`` callback (retried; raises if undeliverable so the run
+       is salvaged rather than lost).
     """
-    input_dir = Path(os.environ.get("PURELMS_INPUT_DIR", "/purelms/input"))
-    output_dir = Path(os.environ.get("PURELMS_OUTPUT_DIR", "/purelms/output"))
-    run_id = os.environ.get("PURELMS_RUN_ID", "unknown")
-
+    location = RuntimeLocation.from_env()
     started_at = time.monotonic()
 
-    # 1. Read + parse the input envelope.
-    input_path = input_dir / "input.json"
-    if not input_path.exists():
-        print(
-            f"TODO_your_slug_here: missing input envelope at {input_path}",
-            file=sys.stderr,
-        )
-        return 1
-
+    # 1. Read + parse the input envelope (GCS URI or local dir).
     try:
-        envelope = SimulationInputEnvelope.model_validate_json(input_path.read_text())
+        envelope = read_input_envelope(location)
     except Exception as exc:
         print(
-            f"TODO_your_slug_here: input envelope invalid: {exc}",
+            f"TODO_your_slug_here: could not read input envelope: {exc}",
             file=sys.stderr,
         )
         return 1
 
     print(
-        f"TODO_your_slug_here: run_id={run_id} "
+        f"TODO_your_slug_here: run_id={location.run_id} "
         f"backend_slug={envelope.backend_slug} "
         f"parameters={envelope.parameters!r}",
     )
 
-    # 2. TODO: domain work goes here. ``envelope.parameters`` is the
-    #    learner-submitted parameter dict (already validated by the
-    #    LMS against ``interactive_task.yaml``). Populate ``outputs``
-    #    with values matching your manifest's ``outputs:`` block.
+    # Optional progress reporting. ``on_progress`` is None on the local
+    # sync path (no endpoint to POST to), so guard before calling. On the
+    # async path, calling it at phase boundaries drives a determinate
+    # progress bar in the learner's browser.
+    on_progress = make_progress_reporter(envelope.context, started_at)
+    if on_progress:
+        on_progress(0, "starting")
+
+    # 2. TODO: domain work goes here. Call ``on_progress(pct, step)`` at
+    #    phase boundaries if your run is long. Populate ``outputs`` with
+    #    values matching your manifest's ``outputs:`` block.
     outputs: dict[str, object] = {
         # "annual_heating_kWh": 1234.5,
     }
@@ -95,13 +100,11 @@ def main() -> int:
         runtime_seconds=runtime_seconds,
     )
 
-    # 3. Write the output envelope.
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "output.json").write_text(output.model_dump_json(indent=2))
+    # 3. Write the output envelope (GCS URI or local dir) + signal
+    #    completion to the worker on the async path.
+    write_output_envelope(location, output, envelope.context)
 
-    print(
-        f"TODO_your_slug_here: wrote output envelope ({output_dir / 'output.json'})",
-    )
+    print("TODO_your_slug_here: wrote output envelope")
     return 0
 
 

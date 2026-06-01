@@ -3,7 +3,7 @@
  * update package.json's build script + interactive_task.yaml's
  * frontend.bundle accordingly.
  *
- * Per ADR-0014 §runtime contract, every InteractiveTask frontend
+ * Every InteractiveTask frontend
  * exports a `mount(element, config, helpers)` function. The bundle
  * owns its element completely after `mount()` returns — the LMS-side
  * dispatcher never re-enters this element.

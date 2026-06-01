@@ -2,7 +2,7 @@
  * Vendored types from the LMS dispatcher contract
  * (``purelms/static/src/ts/sims/contract.ts``).
  *
- * Per ADR-0014, bundles SHOULD NOT import from the LMS — they vendor
+ * Bundles SHOULD NOT import from the LMS — they vendor
  * the contract types. Structural typing makes the runtime contract
  * the only thing that has to match. When the contract evolves (v2
  * envelope additions, for example), this file gets updated alongside
@@ -60,6 +60,26 @@ export interface PollHelperOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * Shared Bootstrap progress bar handed to the bundle via
+ * ``helpers.ui.createProgressBar()``. The LMS owns the markup +
+ * styling; the bundle owns placement (insert ``element`` once) and
+ * driving (call the mode methods as the run advances).
+ */
+export interface ProgressBarController {
+  readonly element: HTMLElement;
+  /** Animated striped full-width bar — work in progress, no measurable %. */
+  indeterminate(label?: string): void;
+  /** Filled bar at `pct` (0–100) with an optional label. */
+  determinate(pct: number, label?: string): void;
+  /** Solid success bar — terminal success. */
+  complete(label?: string): void;
+  /** Solid danger bar — terminal failure. */
+  error(label?: string): void;
+  /** Remove the bar from the DOM. */
+  remove(): void;
+}
+
 export interface MountHelpers {
   api: {
     submit(parameters: Record<string, unknown>): Promise<SubmissionOutcomeResponse>;
@@ -69,11 +89,33 @@ export interface MountHelpers {
     ): AsyncIterable<SimulationRunStatusResponse>;
   };
   escape(value: string): string;
+  /**
+   * Shared UI components the LMS provides. Optional in the vendored
+   * type because a bundle may be loaded by an older LMS dispatcher
+   * that predates ``ui`` — the bundle guards at runtime and falls
+   * back to a text status line.
+   */
+  ui?: {
+    createProgressBar(): ProgressBarController;
+    /**
+     * For a known learner-actionable rejection (`insufficient_credits`,
+     * `tier_gate`) returns a polished Bootstrap alert with a top-up /
+     * upgrade CTA; `null` otherwise. Optional in the vendored type so a
+     * bundle loaded by an older dispatcher guards at runtime.
+     */
+    renderSubmissionError?(error: unknown): HTMLElement | null;
+  };
   meta: {
     bundle: string;
     unitBlockId: number;
     creditCost: number | null;
     backendAvailable: boolean | null;
+    /**
+     * Whether the backend declares it emits intermediate progress
+     * (manifest ``frontend.reports_progress``). Optional for
+     * backward-compat with older dispatchers; treat absent as false.
+     */
+    reportsProgress?: boolean;
   };
 }
 

@@ -163,7 +163,7 @@ def test_main_output_parses_as_simulation_output_envelope(workspace):
 
 
 def test_main_bad_parameters_writes_failed_runtime_envelope(workspace):
-    """Per ADR-0011, credits are refunded on FAILED_RUNTIME. We want the
+    """Credits are refunded on FAILED_RUNTIME. We want the
     LMS to see a clean envelope, not a log-tail fallback."""
     input_dir, output_dir = workspace
     _write_envelope(
@@ -232,3 +232,11 @@ def test_main_malformed_input_file_exits_nonzero(workspace):
 
     assert main() == 1
     assert not (output_dir / "output.json").exists()
+
+
+# The progress/complete callback wiring + the local-dir-vs-GCS I/O now
+# live in the shared ``purelms_itask_runtime`` package and are tested
+# there (``_shared_backends/purelms_itask_runtime/tests/test_runtime.py``).
+# These tests cover only this backend's contract: read input -> run the
+# domain code -> write a SUCCESS / FAILED_RUNTIME envelope, on the local
+# (sync) path the ``workspace`` fixture exercises.

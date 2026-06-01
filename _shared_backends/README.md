@@ -1,17 +1,21 @@
 # `_shared_backends/` — shared backend libraries
 
-This directory is reserved for **libraries shared across multiple
-InteractiveTask backends** (e.g. a common EnergyPlus I/O helper, a
-Modelica parameter-marshalling utility).
+This directory holds **libraries shared across multiple InteractiveTask
+backends** (e.g. a common EnergyPlus I/O helper, a Modelica
+parameter-marshalling utility).
 
-It is currently a placeholder. Nothing lives here yet — the echo
-fixture is self-contained, and the first real backend
-(`energyplus_single_zone/`, Slice 3d) embeds its EnergyPlus helpers
-directly until at least one other backend wants the same code.
+## What lives here
+
+- **`purelms_itask_runtime/`** — the shared backend runtime contract:
+  local-dir vs GCS-URI envelope I/O + the progress/complete worker
+  callbacks. Both `echo` and `energyplus_single_zone` depend on it (the
+  "second user" trigger below), so each backend's `main.py` is identical
+  regardless of whether the LMS launched it via the local DockerCompose
+  path or the async Cloud Run Jobs path. See its README for the contract.
 
 ## When to extract
 
-Per ADR-0014, the rule is **wait for the second user**:
+The rule is **wait for the second user**:
 
 - A first InteractiveTask invents a helper. Helper lives inside that
   InteractiveTask's `backend/` directory.
@@ -49,6 +53,3 @@ picks them up.
   the envelope schemas live in `purelms-shared/` (a separate repo).
 - **Speculative abstractions** — if no second backend wants it yet,
   it doesn't belong here yet.
-
-See [ADR-0014](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0014-interactive-task-framework.md)
-for the full framework specification.

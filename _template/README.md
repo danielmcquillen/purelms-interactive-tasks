@@ -31,8 +31,8 @@ Then:
    `manage.py install_interactive_task ../purelms-interactive-tasks/my_new_task`.
 
 See [`../CONTRIBUTING.md`](../CONTRIBUTING.md) and
-[ADR-0014](https://github.com/danielmcquillen/purelms-project/blob/main/docs/adr/0014-interactive-task-framework.md)
-for the full framework specification.
+[`../BACKEND_AUTHORING_GUIDE.md`](../BACKEND_AUTHORING_GUIDE.md)
+for the full framework reference.
 
 The files in this template are deliberately minimal — just enough
 scaffolding to get you to a working build. Real InteractiveTasks add

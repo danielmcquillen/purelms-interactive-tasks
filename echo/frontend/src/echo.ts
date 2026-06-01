@@ -62,6 +62,9 @@ interface MountHelpers {
     pollStatus(runId: string, options?: PollOptions): AsyncIterable<RunStatusResponse>;
   };
   escape(value: string): string;
+  ui?: {
+    renderSubmissionError?(error: unknown): HTMLElement | null;
+  };
   meta: { bundle: string; unitBlockId: number };
 }
 
@@ -140,6 +143,14 @@ async function handleSubmit(state: SubmitState): Promise<void> {
   try {
     outcome = await helpers.api.submit({ value });
   } catch (err) {
+    // Out of credits / tier gate → the LMS's shared alert with a
+    // top-up / upgrade CTA. Anything else falls back to status text.
+    const alertEl = helpers.ui?.renderSubmissionError?.(err) ?? null;
+    if (alertEl) {
+      statusEl.replaceChildren(alertEl);
+      submitBtn.disabled = false;
+      return;
+    }
     const msg = (err as ApiError).detail ?? String(err);
     statusEl.textContent = `Submission failed: ${msg}`;
     submitBtn.disabled = false;

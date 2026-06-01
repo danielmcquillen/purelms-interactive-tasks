@@ -1,5 +1,5 @@
 # Minimal v1 manifest skeleton. Fill in everything marked TODO.
-# Reference: ADR-0014 §interactive_task.yaml v1 schema.
+# See the BACKEND_AUTHORING_GUIDE for the v1 schema.
 
 schema_version: "purelms.interactive_task.v1"
 
@@ -17,7 +17,7 @@ backend:
   #   <--registry>/purelms-itask-<slug-with-hyphens>:<version>
   # Override here only if you have an unusual registry layout.
   image: purelms-itask-TODO-your-slug-here:0.1.0
-  credit_cost: 1                   # credits debited per run (per ADR-0011)
+  credit_cost: 1                   # credits debited per run
   trust_tier: community            # platform | verified | community
   execution_mode: sync             # v1 accepts only "sync"; async is Slice 4
   default_timeout_seconds: 60

@@ -121,6 +121,41 @@ def test_colder_climate_means_more_heating_energy():
 
 
 # ---------------------------------------------------------------------
+# Progress emission — the on_progress reporter
+# ---------------------------------------------------------------------
+
+
+def test_simulate_emits_monotonic_progress_ending_at_100():
+    """``simulate`` calls ``on_progress(pct, step)`` at phase
+    boundaries. The contract the worker relies on: pct is
+    non-decreasing, bounded 0-100, and the final emission is exactly
+    100 so a determinate bar lands full."""
+    events: list[tuple[int, str]] = []
+    simulate(
+        {"glazing_u_value": 2.5, "window_area": 5.0, "climate_zone": "5A"},
+        on_progress=lambda pct, step: events.append((pct, step)),
+    )
+
+    assert events, "expected at least one progress emission"
+    pcts = [pct for pct, _ in events]
+    assert pcts == sorted(pcts), f"pct not monotonic: {pcts}"
+    assert all(0 <= pct <= 100 for pct in pcts)
+    assert pcts[-1] == 100
+    # Steps are human-readable labels, not empty.
+    assert all(step for _, step in events)
+
+
+def test_simulate_without_reporter_runs_silently():
+    """Omitting ``on_progress`` uses the null-object reporter — the
+    domain code never branches on whether a reporter exists, and the
+    outputs are identical to the reported run."""
+    result = simulate(
+        {"glazing_u_value": 2.5, "window_area": 5.0, "climate_zone": "5A"},
+    )
+    assert result["annual_heating_kWh"] == pytest.approx(1650.0, rel=0.01)
+
+
+# ---------------------------------------------------------------------
 # Climate data invariants
 # ---------------------------------------------------------------------
 

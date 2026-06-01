@@ -1,27 +1,30 @@
 """
 EnergyPlus single-zone backend — container entrypoint.
 
-Wires the envelope contract (read input → call runner → write output)
-to the pure-function domain code in ``runner.simulate``. Pattern
-matches the ``_template/backend/main.py`` skeleton + ``echo``
-reference; the only real difference is the dispatch to ``runner``
-instead of inline echo logic.
+Wires the envelope contract (read input -> call runner -> write output)
+to the pure-function domain code in ``runner.simulate``. The I/O itself
+(local-dir vs GCS URI) and the worker callbacks (progress mid-run +
+the authoritative ``/complete`` at the end) are delegated to the shared
+:mod:`purelms_itask_runtime`, so this file meets the runtime contract on
+BOTH the local DockerCompose path and the async Cloud Run Jobs path
+without any mode branching here.
 
-When real EnergyPlus replaces the stubbed runner (Slice 4+), this
-file shouldn't need to change — ``runner.simulate`` is the swap-in
-seam.
+``runner.simulate`` is the swap-in seam: real EnergyPlus vs the
+analytical fallback is decided inside it, not here.
 """
 
 from __future__ import annotations
 
-import os
 import sys
 import time
-from pathlib import Path
+import traceback
 
+from purelms_itask_runtime import RuntimeLocation
+from purelms_itask_runtime import make_progress_reporter
+from purelms_itask_runtime import read_input_envelope
+from purelms_itask_runtime import write_output_envelope
 from purelms_shared.constants import OutputStatus
 from purelms_shared.envelopes import Message
-from purelms_shared.envelopes import SimulationInputEnvelope
 from purelms_shared.envelopes import SimulationOutputEnvelope
 from runner import simulate
 
@@ -29,54 +32,51 @@ from runner import simulate
 def main() -> int:
     """Container entrypoint. Returns the process exit code.
 
-    Three contractual touchpoints (per ADR-0014):
+    Three contractual touchpoints:
 
-    1. **Input read.** ``$PURELMS_INPUT_DIR/input.json`` MUST exist
-       and parse as ``SimulationInputEnvelope``. If not → exit 1.
+    1. **Input read.** The input envelope MUST exist + parse as
+       ``SimulationInputEnvelope`` (from ``PURELMS_INPUT_URI`` on the
+       async path, else ``PURELMS_INPUT_DIR/input.json``). If not → exit 1.
     2. **Domain work.** Delegated to ``runner.simulate(parameters)``.
-       Validation errors (missing / out-of-range parameter) are
-       caught + reported via a FAILED_RUNTIME output envelope
-       rather than a non-zero exit — the envelope path gives the
-       learner a clean error UI; non-zero exit falls back to a
-       log-tail error.
-    3. **Output write.** ``$PURELMS_OUTPUT_DIR/output.json`` MUST be
-       written before exit 0. Missing file → contract violation.
+       Validation errors (missing / out-of-range parameter) are caught +
+       reported via a FAILED_RUNTIME output envelope rather than a
+       non-zero exit — the envelope path gives the learner a clean error
+       UI; non-zero exit falls back to a log-tail error.
+    3. **Output write.** The output envelope MUST be written before
+       exit 0 (to ``PURELMS_OUTPUT_URI`` on the async path, else
+       ``PURELMS_OUTPUT_DIR/output.json``). On the async path the helper
+       also POSTs the authoritative ``/complete`` callback.
     """
-    input_dir = Path(os.environ.get("PURELMS_INPUT_DIR", "/purelms/input"))
-    output_dir = Path(os.environ.get("PURELMS_OUTPUT_DIR", "/purelms/output"))
-    run_id_env = os.environ.get("PURELMS_RUN_ID", "unknown")
-
+    location = RuntimeLocation.from_env()
     started_at = time.monotonic()
 
-    # 1. Read + parse the input envelope.
-    input_path = input_dir / "input.json"
-    if not input_path.exists():
-        print(
-            f"energyplus_single_zone: missing input envelope at {input_path}",
-            file=sys.stderr,
-        )
-        return 1
-
+    # 1. Read + parse the input envelope (GCS URI or local dir).
     try:
-        envelope = SimulationInputEnvelope.model_validate_json(input_path.read_text())
+        envelope = read_input_envelope(location)
     except Exception as exc:
         print(
-            f"energyplus_single_zone: input envelope invalid: {exc}",
+            f"energyplus_single_zone: could not read input envelope: {exc}",
             file=sys.stderr,
         )
         return 1
 
     print(
-        f"energyplus_single_zone: run_id={run_id_env} "
+        f"energyplus_single_zone: run_id={location.run_id} "
         f"backend={envelope.backend_slug}@{envelope.backend_version} "
         f"parameters={envelope.parameters!r}",
     )
 
-    # 2. Run the domain code. Catch validation errors + surface
-    # them via the envelope (FAILED_RUNTIME path) so the learner
-    # sees a clean error, not a log tail.
+    # 2. Run the domain code. Catch validation errors + surface them via
+    # the envelope (FAILED_RUNTIME path) so the learner sees a clean
+    # error, not a log tail.
+    #
+    # Wire phase progress to the worker's progress endpoint when there's
+    # a real one to POST to (async/Cloud Run). On the local sync path the
+    # reporter is ``None`` and ``simulate`` runs silently — a blocking
+    # sync run is observed via its output envelope, not callbacks.
+    on_progress = make_progress_reporter(envelope.context, started_at)
     try:
-        outputs = simulate(envelope.parameters)
+        outputs = simulate(envelope.parameters, on_progress=on_progress)
         status = OutputStatus.SUCCESS
         messages = [
             Message.model_validate(
@@ -89,8 +89,7 @@ def main() -> int:
         ]
     except (KeyError, ValueError, TypeError) as exc:
         # Bad parameters → FAILED_RUNTIME with a useful message.
-        # The LMS refunds credits on FAILED_RUNTIME per ADR-0011.
-        # We catch all three of:
+        # The LMS refunds credits on FAILED_RUNTIME.
         #   - KeyError: missing required parameter
         #   - TypeError: wrong type (e.g. int where str expected)
         #   - ValueError: out of range / unparseable
@@ -122,19 +121,14 @@ def main() -> int:
         runtime_seconds=runtime_seconds,
     )
 
-    # 3. Write the output envelope. Always — even on
-    # FAILED_RUNTIME — so the LMS reads the clean error path.
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "output.json").write_text(output.model_dump_json(indent=2))
+    # 3. Write the output envelope (GCS URI or local dir) + signal
+    # completion to the worker on the async path. Always written — even
+    # on FAILED_RUNTIME — so the LMS reads the clean error path. Exit 0
+    # even on FAILED_RUNTIME (the envelope status carries the failure);
+    # non-zero exit is reserved for contract violations.
+    write_output_envelope(location, output, envelope.context)
 
-    print(
-        f"energyplus_single_zone: wrote output envelope "
-        f"({output_dir / 'output.json'}) status={status}",
-    )
-    # Exit 0 even on FAILED_RUNTIME — the envelope status carries
-    # the failure information. Non-zero exit is reserved for
-    # contract violations (couldn't read input / couldn't write
-    # output / unexpected exception escaping this function).
+    print(f"energyplus_single_zone: wrote output envelope status={status}")
     return 0
 
 
@@ -144,13 +138,12 @@ if __name__ == "__main__":
     except Exception as exc:
         # Last-resort net for unexpected exceptions — log the trace,
         # exit 1 so the LMS marks the run FAILED_RUNTIME via the
-        # exit-code path (since we don't have a safe output envelope
-        # to write in this catastrophic state).
+        # exit-code path (we don't have a safe output envelope to write
+        # in this catastrophic state; the worker's lost-callback sweeper
+        # reconciles a GCS run left RUNNING).
         print(
             f"energyplus_single_zone: unexpected fatal error: {exc!r}",
             file=sys.stderr,
         )
-        import traceback
-
         traceback.print_exc()
         sys.exit(1)

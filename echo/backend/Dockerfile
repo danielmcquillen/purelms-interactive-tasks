@@ -20,11 +20,17 @@ WORKDIR /build
 COPY pyproject.toml ./
 COPY __metadata__.py ./
 COPY main.py ./
-# _vendor/ contains a locally-built purelms_shared-*.whl (see
-# justfile's _stage-shared-wheel recipe). The wildcard tolerates
-# version bumps without Dockerfile changes.
+# _vendor/ contains locally-built wheels (see the justfile's
+# _stage-shared-wheel recipe): purelms_shared-*.whl + the shared
+# purelms_itask_runtime-*.whl. Install the runtime with its ``cloud``
+# extra: pip resolves the runtime + purelms-shared from --find-links
+# /tmp/_vendor and pulls google-cloud-storage / google-auth (GCS I/O +
+# OIDC for the worker callbacks) from PyPI, so the same image meets the
+# runtime contract on the local DockerCompose AND the Cloud Run Jobs path.
 COPY _vendor/ /tmp/_vendor/
-RUN pip install --no-cache-dir --target /pkgs /tmp/_vendor/purelms_shared-*.whl
+RUN pip install --no-cache-dir --target /pkgs \
+    --find-links /tmp/_vendor \
+    "purelms-itask-runtime[cloud]"
 
 FROM python:3.13-slim AS runtime
 WORKDIR /app
