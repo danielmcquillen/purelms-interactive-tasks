@@ -1,0 +1,24 @@
+{
+  "name": "@purelms-interactive-tasks/modelica-diagram-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Modelica FMU diagram InteractiveTask frontend — Drawflow component canvas, topology feedback, and a result chart.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/modelica_diagram.ts --bundle --minify --sourcemap --format=esm --outfile=dist/modelica_diagram.js",
+    "watch": "esbuild src/modelica_diagram.ts --bundle --sourcemap --format=esm --outfile=dist/modelica_diagram.js --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "drawflow": "^0.0.60"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.26.0",
+    "happy-dom": "^20.9.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
+  }
+}

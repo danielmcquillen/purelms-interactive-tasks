@@ -49,6 +49,7 @@ build slug: (_stage-shared-wheel slug)
 build-all:
     just build echo
     just build energyplus_single_zone
+    just build modelica_diagram
 
 # Push one InteractiveTask's image to the configured registry.
 # Requires DOCKER_IMAGE_REGISTRY env var, e.g.:
@@ -75,6 +76,7 @@ frontend-build slug:
 frontend-build-all:
     just frontend-build echo
     just frontend-build energyplus_single_zone
+    just frontend-build modelica_diagram
 
 # ---------------------------------------------------------------------
 # Testing
@@ -90,6 +92,7 @@ test-all:
     uv run pytest
     just test echo
     just test energyplus_single_zone
+    just test modelica_diagram
 
 # Lint + format the whole workspace.
 lint:

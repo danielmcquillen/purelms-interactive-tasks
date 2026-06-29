@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://purelms.org/schemas/diagram.v1.schema.json",
+  "title": "purelms.diagram.v1",
+  "description": "Structural contract for a student-built diagram (ADR-0019). Scenario-specific and graph-semantic checks (node type in the scenario palette, port-on-type, per-kind edge canonicalization, duplicate/self-loop) are the backend topology checker's job, NOT this schema. This schema validates shape, limits, patterns, and closedness only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "nodes", "edges"],
+  "properties": {
+    "schema": {
+      "const": "purelms.diagram.v1"
+    },
+    "nodes": {
+      "type": "array",
+      "maxItems": 50,
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "edges": {
+      "type": "array",
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/edge" }
+    }
+  },
+  "$defs": {
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9_-]{1,64}$" },
+        "type": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "target"],
+      "properties": {
+        "source": { "$ref": "#/$defs/endpoint" },
+        "target": { "$ref": "#/$defs/endpoint" }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node", "port"],
+      "properties": {
+        "node": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "port": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    }
+  }
+}

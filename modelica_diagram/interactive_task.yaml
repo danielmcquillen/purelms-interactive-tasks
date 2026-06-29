@@ -1,0 +1,98 @@
+# InteractiveTask manifest for the Modelica FMU diagram task (ADR-0019).
+#
+# The learner assembles a hydronic heating loop from Modelica Buildings
+# Library components on a canvas; the backend topology-checks the diagram
+# against the scenario's expected graph, then (once the FMU is present) runs
+# the pre-compiled FMU. FMUs are platform-authored (trust_tier: platform);
+# there is no author upload in the MVP.
+
+schema_version: "purelms.interactive_task.v1"
+
+slug: modelica_diagram
+name: Modelica FMU Diagram
+version: 0.1.0
+description: |
+  Build a hydronic heating loop (boiler -> pump -> radiator -> room) from
+  Modelica Buildings Library components, connect them correctly, set a couple
+  of parameters, and run the pre-compiled FMU to see how the room temperature
+  responds.
+
+backend:
+  # Built via `just build modelica_diagram`; production pushes to a registry
+  # and installs with the resolved @sha256 digest (install --image-uri).
+  image: purelms-itask-modelica-diagram:dev
+  credit_cost: 2
+  trust_tier: platform
+  execution_mode: sync
+  default_timeout_seconds: 60
+
+frontend:
+  bundle: modelica_diagram.js
+
+parameters:
+  - name: scenario
+    type: enum
+    label: Scenario
+    default: hydronic_loop
+    choices:
+      - { value: hydronic_loop, label: "Hydronic loop" }
+  - name: diagram_json
+    type: string
+    label: Diagram
+    description: >-
+      The learner's diagram graph (purelms.diagram.v1). Filled by the bundle;
+      never rendered as a form field.
+  - name: boiler_nominal_power_kw
+    type: number
+    label: Boiler nominal power (kW)
+    default: 10
+    min: 1
+    max: 50
+  - name: temperature_setpoint_c
+    type: number
+    label: Temperature setpoint (C)
+    default: 60
+    min: 30
+    max: 90
+
+outputs:
+  - name: topology_correct
+    type: boolean
+    label: Diagram correct
+  - name: room_temp_final_c
+    type: number
+    label: Final room temperature
+    unit: degC
+  - name: energy_used_kwh
+    type: number
+    label: Energy used
+    unit: kWh
+  - name: series_json
+    type: string
+    label: Time series (JSON)
+
+# Backend files baked into the container image, pinned by SHA-256 (ADR-0019).
+# Paths are relative to this InteractiveTask root, backend/-prefixed.
+assets:
+  - path: backend/scenarios/hydronic_loop/scenario.json
+    sha256: "93f854909bc6f6e90317fb8d6d2c061714124d7fa3b4317571f4b80ef4634bd6"
+  # TODO (FMU compile): add the line below once
+  # backend/scenarios/hydronic_loop/model.fmu is committed. `install`
+  # filesystem-checks every asset, so listing it before the file exists
+  # would fail the install.
+  # - path: backend/scenarios/hydronic_loop/model.fmu
+  #   sha256: "<64-hex of the compiled FMU>"
+
+lms_context_used:
+  - run_id
+  - backend_slug
+  - backend_version
+
+requires_user_context: false
+
+# A wrong diagram returns a SUCCESS envelope with topology_correct=false (the
+# run worked; the answer was wrong). passthrough maps it to the pass outcome.
+lms_outcomes:
+  passed:
+    source: outputs.topology_correct
+    transform: passthrough

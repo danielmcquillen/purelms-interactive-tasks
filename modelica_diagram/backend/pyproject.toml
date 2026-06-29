@@ -1,0 +1,36 @@
+[project]
+name = "purelms-itask-modelica-diagram"
+version = "0.1.0"
+description = "Modelica FMU diagram InteractiveTask backend — topology-check a learner's diagram, then run a pre-compiled MBL FMU"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "Daniel McQuillen", email = "daniel@mcquilleninteractive.com" },
+]
+dependencies = [
+    "purelms-shared>=0.5.0",
+    # Shared backend runtime (local-dir vs GCS envelope I/O + worker
+    # callbacks). Workspace member; the image installs its vendored wheel
+    # with the [cloud] extra (see the Dockerfile).
+    "purelms-itask-runtime",
+    # Structural validation of the learner's diagram against purelms.diagram.v1.
+    "jsonschema>=4.0,<5",
+    # FMU execution (only reached once the topology is correct).
+    "fmpy>=0.3,<1",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<10",
+]
+
+[tool.uv.sources]
+purelms-itask-runtime = { workspace = true }
+# purelms-shared isn't on PyPI with purelms.diagram.v1 yet (added in 0.5.0);
+# resolve from the local checkout for dev/test. The container build vendors the
+# wheel via the justfile's _stage-shared-wheel recipe instead (see Dockerfile).
+purelms-shared = { path = "../../../purelms-shared", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

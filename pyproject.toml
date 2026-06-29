@@ -42,6 +42,7 @@ dependencies = [
 members = [
     "echo/backend",
     "energyplus_single_zone/backend",
+    "modelica_diagram/backend",
     # Shared backend runtime helper (local-dir vs GCS envelope I/O +
     # progress/complete worker callbacks). Vendored into each backend
     # image's _vendor/ wheel like purelms-shared; see the justfile.

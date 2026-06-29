@@ -1,0 +1,59 @@
+{
+  "id": "hydronic_loop",
+  "label": "Hydronic loop",
+  "description": "A boiler heats water that a pump circulates through a radiator into a room; the room temperature feeds back to the boiler's setpoint. Modeled on Buildings.Examples.Tutorial.Boiler.",
+  "palette": [
+    {
+      "type": "boiler",
+      "label": "Boiler",
+      "ports": [
+        { "name": "port_a", "kind": "fluid", "ui_side": "input" },
+        { "name": "port_b", "kind": "fluid", "ui_side": "output" },
+        { "name": "T_set", "kind": "signal", "direction": "in", "ui_side": "input" }
+      ]
+    },
+    {
+      "type": "pump",
+      "label": "Pump",
+      "ports": [
+        { "name": "port_a", "kind": "fluid", "ui_side": "input" },
+        { "name": "port_b", "kind": "fluid", "ui_side": "output" }
+      ]
+    },
+    {
+      "type": "radiator",
+      "label": "Radiator",
+      "ports": [
+        { "name": "port_a", "kind": "fluid", "ui_side": "input" },
+        { "name": "port_b", "kind": "fluid", "ui_side": "output" }
+      ]
+    },
+    {
+      "type": "room",
+      "label": "Room",
+      "ports": [
+        { "name": "port_a", "kind": "fluid", "ui_side": "input" },
+        { "name": "port_b", "kind": "fluid", "ui_side": "output" },
+        { "name": "T_room", "kind": "signal", "direction": "out", "ui_side": "output" }
+      ]
+    }
+  ],
+  "expected": {
+    "nodes": ["boiler", "pump", "radiator", "room"],
+    "edges": [
+      { "source": { "type": "boiler", "port": "port_b" }, "target": { "type": "pump", "port": "port_a" } },
+      { "source": { "type": "pump", "port": "port_b" }, "target": { "type": "radiator", "port": "port_a" } },
+      { "source": { "type": "radiator", "port": "port_b" }, "target": { "type": "room", "port": "port_a" } },
+      { "source": { "type": "room", "port": "port_b" }, "target": { "type": "boiler", "port": "port_a" } },
+      { "source": { "type": "room", "port": "T_room" }, "target": { "type": "boiler", "port": "T_set" } }
+    ]
+  },
+  "parameter_map": {
+    "boiler_nominal_power_kw": "boi.Q_flow_nominal",
+    "temperature_setpoint_c": "TSet.k"
+  },
+  "outputs": {
+    "room_temp_final_c": { "fmu_variable": "rooTem.T", "summarize": "final", "unit": "degC" },
+    "energy_used_kwh": { "fmu_variable": "boi.QFuel_flow", "summarize": "integral", "unit": "kWh" }
+  }
+}
