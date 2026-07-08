@@ -1,0 +1,29 @@
+
+<h1>HydronicLoop</h1>
+<p> <i>Single-room hydronic heating loop for the PureLMS modelica_diagram task.
+
+   A boiler heats water that a pump circulates through a radiator in a closed
+   loop; the radiator warms a single room through its heat ports; the room
+   loses heat to a fixed outdoor temperature; an on/off thermostat cycles the
+   boiler. Four author-facing knobs, all genuinely tunable in the FMU:
+
+     QBoi_kW      boiler power [kW]   -> warm-up speed + adequacy (an undersized
+                  boiler never reaches the setpoint), NOT total energy.
+     UA_WperK     heat loss [W/K]     -> heating ENERGY (the envelope dominates);
+                  lower = better insulated.
+     TOut_degC    outdoor temp [degC] -> heating load: a colder day needs more
+                  energy and a bigger boiler to keep up.
+     TRooSet_degC target temp [degC]  -> comfort/energy trade-off.
+
+   Outputs: TRoo_degC (final room temp), EHea_kWh (heating energy),
+            tReach_min (minutes to first reach the setpoint; = run length if the
+            boiler is too small to ever get there).
+
+   IMPORTANT: the fluid components are sized for a FIXED design power
+   (QBoiMax_kW). If QBoi_kW sized a component, OpenModelica would constant-fold
+   it and the slider would do nothing (it did, in v1). Instead QBoi_kW scales
+   the firing rate, which keeps it a true runtime parameter. Based on
+   Buildings.Examples.Tutorial.Boiler (Buildings 13.0.0).
+</i> </p>
+<h4> <u> Information </u> </h4>
+<h4> <u> Revisions </u> </h4>

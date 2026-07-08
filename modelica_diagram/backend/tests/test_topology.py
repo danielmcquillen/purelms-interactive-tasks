@@ -56,10 +56,37 @@ def test_backwards_fluid_edge_still_passes():
     assert result.correct is True, result.messages
 
 
+def test_backwards_heat_edge_still_passes():
+    """A heat connector is acausal too — the radiator<->room link matches reversed."""
+    d = _correct_diagram()
+    heat = next(
+        e
+        for e in d["edges"]
+        if e["source"]["port"] == "heat" or e["target"]["port"] == "heat"
+    )
+    heat["source"], heat["target"] = heat["target"], heat["source"]
+    result = check_topology(d, SCENARIO)
+    assert result.correct is True, result.messages
+
+
+def test_heat_to_fluid_connection_is_rejected():
+    """Heat and fluid are different connector kinds — they can't be joined."""
+    d = _correct_diagram()
+    d["edges"].append(
+        {
+            "source": {"node": "radiator", "port": "heat"},  # heat
+            "target": {"node": "pump", "port": "port_a"},  # fluid
+        },
+    )
+    result = check_topology(d, SCENARIO)
+    assert result.correct is False
+    assert any("different types" in m for m in result.messages)
+
+
 def test_reversed_signal_edge_is_rejected():
     """A signal connector is directed — output -> input only."""
     d = _correct_diagram()
-    # The last edge is the signal edge room.T_room(out) -> boiler.T_set(in).
+    # The last edge is the signal edge room.T_room(out) -> boiler.T_room(in).
     d["edges"][-1]["source"], d["edges"][-1]["target"] = (
         d["edges"][-1]["target"],
         d["edges"][-1]["source"],
@@ -79,11 +106,12 @@ def test_missing_fluid_edge_is_reported():
 
 def test_extra_edge_is_reported():
     d = _correct_diagram()
-    # A valid-port but unexpected fluid connection: boiler.port_a <-> radiator.port_b.
+    # A valid-port but unexpected fluid connection: boiler.port_b -> radiator.port_a
+    # (short-circuiting the pump). Not part of the expected loop.
     d["edges"].append(
         {
-            "source": {"node": "boiler", "port": "port_a"},
-            "target": {"node": "radiator", "port": "port_b"},
+            "source": {"node": "boiler", "port": "port_b"},
+            "target": {"node": "radiator", "port": "port_a"},
         },
     )
     result = check_topology(d, SCENARIO)
@@ -122,7 +150,7 @@ def test_fluid_to_signal_connection_is_rejected():
     )
     result = check_topology(d, SCENARIO)
     assert result.correct is False
-    assert any("fluid port to a signal port" in m for m in result.messages)
+    assert any("different types" in m for m in result.messages)
 
 
 def test_unknown_port_is_reported():

@@ -1,0 +1,17 @@
+# Allowed signers for verifying release tags in CI (`git verify-tag`).
+#
+# The release workflow (.github/workflows/release.yml) refuses to build a
+# tag that isn't signed by a key listed here.
+#
+# This is the SAME Secure-Enclave (Secretive) key you sign validibot
+# releases with. Your global git config already points at it
+# (gpg.format=ssh, tag.gpgsign=true, user.signingkey → the Secretive key),
+# so `just release` in this repo signs with the same key — no per-repo
+# git config needed.
+#
+# To rotate or add a signer, append a line of the form:
+#   <identity> namespaces="git" <key-type> <base64-public-key> <comment>
+# Print your current public signing key with:
+#   cat "$(git config --global user.signingkey)"
+
+daniel@mcquilleninteractive.com namespaces="git" ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBOsPda2rY0VkIJUuK85cVc2AgKz/z7QfYDp6dpvMYhrBSsYQYHoxG9s77wRzQ8OPSfl5zmpePWGG1kwaLW0G/xs= validibot-signing@secretive.Daniel’s-Mac-mini.local

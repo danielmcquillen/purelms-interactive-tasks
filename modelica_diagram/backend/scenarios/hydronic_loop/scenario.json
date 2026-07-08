@@ -1,40 +1,40 @@
 {
   "id": "hydronic_loop",
   "label": "Hydronic loop",
-  "description": "A boiler heats water that a pump circulates through a radiator into a room; the room temperature feeds back to the boiler's setpoint. Modeled on Buildings.Examples.Tutorial.Boiler.",
+  "description": "A boiler heats water that a pump circulates through a radiator in a closed loop; the radiator warms the room through a heat connection (the room is NOT in the water loop), and the room temperature feeds the boiler's thermostat. Modeled on Buildings.Examples.Tutorial.Boiler.",
   "palette": [
     {
       "type": "boiler",
       "label": "Boiler",
       "ports": [
-        { "name": "port_a", "kind": "fluid", "ui_side": "input" },
-        { "name": "port_b", "kind": "fluid", "ui_side": "output" },
-        { "name": "T_set", "kind": "signal", "direction": "in", "ui_side": "input" }
+        { "name": "port_a", "kind": "fluid", "ui_side": "input", "label": "Hydronic in" },
+        { "name": "port_b", "kind": "fluid", "ui_side": "output", "label": "Hydronic out" },
+        { "name": "T_room", "kind": "signal", "direction": "in", "ui_side": "input", "label": "Room temp" }
       ]
     },
     {
       "type": "pump",
       "label": "Pump",
       "ports": [
-        { "name": "port_a", "kind": "fluid", "ui_side": "input" },
-        { "name": "port_b", "kind": "fluid", "ui_side": "output" }
+        { "name": "port_a", "kind": "fluid", "ui_side": "input", "label": "Hydronic in" },
+        { "name": "port_b", "kind": "fluid", "ui_side": "output", "label": "Hydronic out" }
       ]
     },
     {
       "type": "radiator",
       "label": "Radiator",
       "ports": [
-        { "name": "port_a", "kind": "fluid", "ui_side": "input" },
-        { "name": "port_b", "kind": "fluid", "ui_side": "output" }
+        { "name": "port_a", "kind": "fluid", "ui_side": "input", "label": "Hydronic in" },
+        { "name": "port_b", "kind": "fluid", "ui_side": "output", "label": "Hydronic out" },
+        { "name": "heat", "kind": "heat", "ui_side": "output", "label": "Heat out" }
       ]
     },
     {
       "type": "room",
       "label": "Room",
       "ports": [
-        { "name": "port_a", "kind": "fluid", "ui_side": "input" },
-        { "name": "port_b", "kind": "fluid", "ui_side": "output" },
-        { "name": "T_room", "kind": "signal", "direction": "out", "ui_side": "output" }
+        { "name": "heat", "kind": "heat", "ui_side": "input", "label": "Heat in" },
+        { "name": "T_room", "kind": "signal", "direction": "out", "ui_side": "output", "label": "Room temp" }
       ]
     }
   ],
@@ -43,17 +43,20 @@
     "edges": [
       { "source": { "type": "boiler", "port": "port_b" }, "target": { "type": "pump", "port": "port_a" } },
       { "source": { "type": "pump", "port": "port_b" }, "target": { "type": "radiator", "port": "port_a" } },
-      { "source": { "type": "radiator", "port": "port_b" }, "target": { "type": "room", "port": "port_a" } },
-      { "source": { "type": "room", "port": "port_b" }, "target": { "type": "boiler", "port": "port_a" } },
-      { "source": { "type": "room", "port": "T_room" }, "target": { "type": "boiler", "port": "T_set" } }
+      { "source": { "type": "radiator", "port": "port_b" }, "target": { "type": "boiler", "port": "port_a" } },
+      { "source": { "type": "radiator", "port": "heat" }, "target": { "type": "room", "port": "heat" } },
+      { "source": { "type": "room", "port": "T_room" }, "target": { "type": "boiler", "port": "T_room" } }
     ]
   },
   "parameter_map": {
-    "boiler_nominal_power_kw": "boi.Q_flow_nominal",
-    "temperature_setpoint_c": "TSet.k"
+    "boiler_nominal_power_kw": "QBoi_kW",
+    "room_setpoint_c": "TRooSet_degC",
+    "heat_loss_w_per_k": "UA_WperK",
+    "outdoor_temp_c": "TOut_degC"
   },
   "outputs": {
-    "room_temp_final_c": { "fmu_variable": "rooTem.T", "summarize": "final", "unit": "degC" },
-    "energy_used_kwh": { "fmu_variable": "boi.QFuel_flow", "summarize": "integral", "unit": "kWh" }
+    "room_temp_final_c": { "fmu_variable": "TRoo_degC", "summarize": "final", "unit": "degC" },
+    "energy_used_kwh": { "fmu_variable": "EHea_kWh", "summarize": "final", "unit": "kWh" },
+    "time_to_setpoint_min": { "fmu_variable": "tReach_min", "summarize": "final", "unit": "min" }
   }
 }

@@ -38,10 +38,30 @@ const TASK_CSS = `
 .mdl-card .v{font-size:18px;font-weight:700;color:#111827;font-variant-numeric:tabular-nums}
 .mdl-chart{width:100%;height:120px;border:1px solid #e5e7eb;border-radius:6px;background:#fff}
 .mdl-notice{background:#fef3c7;border:1px solid #fbbf24;padding:12px 16px;border-radius:6px;color:#92400e}
-.drawflow .drawflow-node.mdl-node{background:#fff;border:1px solid #94a3b8;width:150px;min-height:34px;padding:10px;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.drawflow .drawflow-node.mdl-node{box-sizing:border-box;background:#fff;border:1px solid #94a3b8;width:184px;min-height:34px;padding:0;box-shadow:0 1px 2px rgba(0,0,0,.06);align-items:flex-start}
 .drawflow .drawflow-node.mdl-node.selected{border-color:#2563eb;background:#eff6ff}
-.mdl-node-title{font-weight:600;font-size:13px;color:#0f172a}
-.mdl-node-ports{font-size:10px;color:#64748b;margin-top:3px;line-height:1.3}
+.mdl-node-title{box-sizing:border-box;width:100%;height:30px;line-height:30px;font-weight:600;font-size:13px;color:#0f172a;padding:0 10px;border-bottom:1px solid #e2e8f0;background:#f8fafc;border-radius:7px 7px 0 0}
+.mdl-ports{padding:5px 0}
+.mdl-port-row{display:flex;align-items:center;height:25px;padding:0 11px;font-size:11px;font-weight:500}
+.mdl-port-out{margin-left:auto;text-align:right}
+.mdl-kind-fluid{color:#2563eb}
+.mdl-kind-heat{color:#ea580c}
+.mdl-kind-signal{color:#16a34a}
+/* Dots: smaller + neutral, sitting on the node edge next to their labels. The
+   25px slot (13px dot + 6px top/bottom margin) matches the .mdl-port-row height
+   so dot N lines up with row N; the 35px top margin clears the title + padding.
+   (Tweak these three together if the dots and labels drift apart.) */
+.drawflow .drawflow-node.mdl-node .input,.drawflow .drawflow-node.mdl-node .output{width:13px;height:13px;background:#fff;border:2px solid #64748b;margin:6px 0;top:0}
+.drawflow .drawflow-node.mdl-node .input{left:-7px}
+.drawflow .drawflow-node.mdl-node .output{right:-7px}
+.drawflow .drawflow-node.mdl-node .inputs,.drawflow .drawflow-node.mdl-node .outputs{margin-top:35px}
+/* Wires coloured by connector kind, matching the port-label colours. */
+.drawflow .connection.mdl-wire-fluid .main-path{stroke:#2563eb}
+.drawflow .connection.mdl-wire-heat .main-path{stroke:#ea580c}
+/* The signal wire is the only causal/directional connector (room temp ->
+   boiler thermostat), so it gets an arrowhead; fluid + heat are acausal and
+   intentionally stay arrow-less. */
+.drawflow .connection.mdl-wire-signal .main-path{stroke:#16a34a;marker-end:url(#mdl-arrow-signal)}
 `;
 
 export const STYLES = DRAWFLOW_CSS + TASK_CSS;
@@ -55,4 +75,34 @@ export function injectStyles(doc: Document, id = "modelica-diagram-styles"): voi
   style.id = id;
   style.textContent = STYLES;
   doc.head.append(style);
+
+  // Hidden SVG holding the signal-wire arrowhead; the marker-end CSS above
+  // references it by id. Built with createElementNS (no innerHTML) so the nodes
+  // land in the SVG namespace and there is no markup-injection surface.
+  const svgNs = "http://www.w3.org/2000/svg";
+  const svg = doc.createElementNS(svgNs, "svg");
+  svg.setAttribute("width", "0");
+  svg.setAttribute("height", "0");
+  svg.setAttribute("aria-hidden", "true");
+  const marker = doc.createElementNS(svgNs, "marker");
+  for (const [key, value] of Object.entries({
+    id: "mdl-arrow-signal",
+    viewBox: "0 0 10 10",
+    refX: "8",
+    refY: "5",
+    markerWidth: "8",
+    markerHeight: "8",
+    markerUnits: "userSpaceOnUse",
+    orient: "auto",
+  })) {
+    marker.setAttribute(key, value);
+  }
+  const arrow = doc.createElementNS(svgNs, "path");
+  arrow.setAttribute("d", "M0 0 L10 5 L0 10 z");
+  arrow.setAttribute("fill", "#16a34a");
+  marker.append(arrow);
+  const defs = doc.createElementNS(svgNs, "defs");
+  defs.append(marker);
+  svg.append(defs);
+  doc.body.append(svg);
 }

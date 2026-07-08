@@ -50,10 +50,12 @@ function correctLoopExport(): unknown {
         data: {
           "1": node(1, "boiler", { output_1: { connections: [{ node: "2", output: "input_1" }] } }),
           "2": node(2, "pump", { output_1: { connections: [{ node: "3", output: "input_1" }] } }),
-          "3": node(3, "radiator", { output_1: { connections: [{ node: "4", output: "input_1" }] } }),
+          "3": node(3, "radiator", {
+            output_1: { connections: [{ node: "1", output: "input_1" }] }, // port_b -> boiler.port_a
+            output_2: { connections: [{ node: "4", output: "input_1" }] }, // heat -> room.heat
+          }),
           "4": node(4, "room", {
-            output_1: { connections: [{ node: "1", output: "input_1" }] },
-            output_2: { connections: [{ node: "1", output: "input_2" }] },
+            output_1: { connections: [{ node: "1", output: "input_2" }] }, // T_room -> boiler.T_room
           }),
         },
       },
@@ -114,7 +116,7 @@ describe("mount", () => {
     await mount(host, {}, makeHelpers());
 
     expect(host.querySelectorAll(".mdl-palette button")).toHaveLength(4);
-    expect(host.querySelectorAll(".mdl-field input[type=range]")).toHaveLength(2);
+    expect(host.querySelectorAll(".mdl-field input[type=range]")).toHaveLength(4);
     expect(host.querySelector(".mdl-run")).not.toBeNull();
   });
 
@@ -154,7 +156,7 @@ describe("mount", () => {
     const params = vi.mocked(helpers.api.submit).mock.calls[0]?.[0];
     expect(params?.scenario).toBe("hydronic_loop");
     expect(params?.boiler_nominal_power_kw).toBe(10);
-    expect(params?.temperature_setpoint_c).toBe(60);
+    expect(params?.room_setpoint_c).toBe(21);
     const diagram = JSON.parse(String(params?.diagram_json));
     expect(diagram.schema).toBe("purelms.diagram.v1");
     expect(diagram.nodes).toHaveLength(4);

@@ -1,0 +1,3 @@
+// One-time setup: install the Modelica Buildings Library via the OpenModelica
+// package manager (downloads from the Modelica package index).
+installPackage(Buildings); getErrorString();

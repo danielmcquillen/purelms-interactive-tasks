@@ -1,4 +1,4 @@
-# InteractiveTask manifest for the Modelica FMU diagram task (ADR-0019).
+# InteractiveTask manifest for the Modelica FMU diagram task.
 #
 # The learner assembles a hydronic heating loop from Modelica Buildings
 # Library components on a canvas; the backend topology-checks the diagram
@@ -10,12 +10,12 @@ schema_version: "purelms.interactive_task.v1"
 
 slug: modelica_diagram
 name: Modelica FMU Diagram
-version: 0.1.0
+version: 0.2.2
 description: |
   Build a hydronic heating loop (boiler -> pump -> radiator -> room) from
-  Modelica Buildings Library components, connect them correctly, set a couple
-  of parameters, and run the pre-compiled FMU to see how the room temperature
-  responds.
+  Modelica Buildings Library components, connect them correctly, then adjust the
+  boiler power, insulation, room setpoint, and outdoor temperature and run the
+  pre-compiled FMU to see how the room temperature and heating energy respond.
 
 backend:
   # Built via `just build modelica_diagram`; production pushes to a registry
@@ -42,18 +42,37 @@ parameters:
     description: >-
       The learner's diagram graph (purelms.diagram.v1). Filled by the bundle;
       never rendered as a form field.
+  - name: layout_json
+    type: string
+    label: Layout
+    description: >-
+      Neutral canvas layout (node positions + reroute waypoints). Filled by the
+      bundle; never rendered as a form field. Ignored by the backend.
   - name: boiler_nominal_power_kw
     type: number
     label: Boiler nominal power (kW)
     default: 10
-    min: 1
-    max: 50
-  - name: temperature_setpoint_c
+    min: 2
+    max: 20
+  - name: room_setpoint_c
     type: number
-    label: Temperature setpoint (C)
-    default: 60
-    min: 30
-    max: 90
+    label: Target room temperature (C)
+    default: 21
+    min: 16
+    max: 26
+  - name: heat_loss_w_per_k
+    type: number
+    label: Heat loss (W/K)
+    description: Building heat-loss coefficient; lower = better insulated.
+    default: 150
+    min: 50
+    max: 400
+  - name: outdoor_temp_c
+    type: number
+    label: Outdoor temperature (C)
+    default: 0
+    min: -15
+    max: 15
 
 outputs:
   - name: topology_correct
@@ -65,23 +84,23 @@ outputs:
     unit: degC
   - name: energy_used_kwh
     type: number
-    label: Energy used
+    label: Heat delivered
     unit: kWh
+  - name: time_to_setpoint_min
+    type: number
+    label: Time to reach setpoint
+    unit: min
   - name: series_json
     type: string
     label: Time series (JSON)
 
-# Backend files baked into the container image, pinned by SHA-256 (ADR-0019).
+# Backend files baked into the container image, pinned by SHA-256.
 # Paths are relative to this InteractiveTask root, backend/-prefixed.
 assets:
   - path: backend/scenarios/hydronic_loop/scenario.json
-    sha256: "93f854909bc6f6e90317fb8d6d2c061714124d7fa3b4317571f4b80ef4634bd6"
-  # TODO (FMU compile): add the line below once
-  # backend/scenarios/hydronic_loop/model.fmu is committed. `install`
-  # filesystem-checks every asset, so listing it before the file exists
-  # would fail the install.
-  # - path: backend/scenarios/hydronic_loop/model.fmu
-  #   sha256: "<64-hex of the compiled FMU>"
+    sha256: "86f7e3467c3713811f69f1eb398b12156905e68258d9cf16974dc11dabd392d7"
+  - path: backend/scenarios/hydronic_loop/model.fmu
+    sha256: "a1687eee04e26e71d59458c7a81b0a2ea2238c8cb9873b90a7a466cc55321bb2"
 
 lms_context_used:
   - run_id

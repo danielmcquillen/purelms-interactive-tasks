@@ -4,7 +4,7 @@ Run without Docker via ``main()`` against temp dirs (mirrors echo). Needs the
 backend env (purelms-itask-runtime + purelms-shared + jsonschema): run via
 ``just test modelica_diagram``. Covers the no-FMU paths (wrong diagram, unknown
 scenario); the correct-diagram + FMU path runs in-container once the FMU is
-compiled (ADR-0019 Check 1).
+compiled (Check 1).
 """
 
 from __future__ import annotations

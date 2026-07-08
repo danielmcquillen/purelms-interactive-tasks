@@ -1,0 +1,286 @@
+# Release workflow for PureLMS interactive-task backend images.
+#
+# Mirrors validibot-validator-backends' publishing mechanism so the two
+# projects share one mental model — but every registry, project, key, and
+# identity here is PureLMS's own. Nothing is shared with validibot: the
+# GAR target comes from THIS repo's GitHub Actions variables/secrets, and
+# the sigstore attestation is signed by THIS repo's Actions identity.
+#
+# On a signed-tag push (``v*``), each backend image is built with full
+# supply-chain provenance:
+#
+# 1. **OIDC build attestation** — ``actions/attest-build-provenance``
+#    produces a sigstore attestation linking the image digest to *this*
+#    GitHub Actions run. A PureLMS deployment running
+#    ``SIMULATION_IMAGE_POLICY=signed_digest`` verifies it (via
+#    ``gh attestation verify`` / ``cosign verify-attestation``) before it
+#    will admit the backend at ``install_interactive_task`` time.
+# 2. **SBOM (SPDX)** — ``docker/build-push-action`` with ``sbom: true``
+#    embeds a SPDX SBOM into the OCI image manifest; a copy is also
+#    attached to the GitHub Release for convenience.
+# 3. **Signed-tag verification** — the workflow refuses to build an
+#    unsigned tag (verified against ``.allowed_signers``), so the only way
+#    to cut a release image is from a maintainer's signed tag.
+#
+# Default registry: GitHub Container Registry (GHCR)
+# ==================================================
+# Backend images are part of PureLMS's open promise — anyone self-hosting
+# must be able to ``docker pull`` an official image. GHCR is free for
+# public images and authenticates via the ambient ``GITHUB_TOKEN``.
+#
+# Image references published per release:
+#     ghcr.io/<owner>/purelms-itask-<slug>:vX.Y.Z
+#     ghcr.io/<owner>/purelms-itask-<slug>:latest
+# (<slug> is the backend directory name with underscores → hyphens, e.g.
+# energyplus_single_zone → purelms-itask-energyplus-single-zone.)
+#
+# Optional secondary push: PureLMS's Google Artifact Registry (GAR)
+# =================================================================
+# When THIS repo's GAR variables/secrets are set, the same digest is also
+# mirrored to PureLMS's private GAR (for Cloud Run Jobs deploy-time pulls).
+# Set these in the purelms-interactive-tasks repo's Settings → Actions:
+#
+#   Variables (Settings → Secrets and variables → Actions → Variables):
+#     GCP_PROJECT_ID          # PureLMS's GCP project (NOT validibot's)
+#     GCP_REGION              # e.g. us-central1
+#     GCP_GAR_REPOSITORY      # PureLMS's Artifact Registry repo name
+#   Secrets:
+#     GCP_WORKLOAD_IDENTITY_PROVIDER   # PureLMS's WIF provider resource
+#     GCP_SERVICE_ACCOUNT_EMAIL        # PureLMS's push service account
+#
+# When ``GCP_PROJECT_ID`` is unset, the GAR step is skipped cleanly and
+# GHCR is the whole release.
+
+name: Release interactive-task backend images
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.2.3)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify-signed-tag:
+    name: Verify tag signature and create release
+    runs-on: ubuntu-latest
+    permissions:
+      # Lets us create the GitHub release once, here, so the parallel
+      # matrix jobs below can attach SBOMs without racing on creation.
+      contents: write
+
+    steps:
+      - name: Checkout (full history for tag verification)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      # ``git verify-tag`` needs to know where the repo's allowed-signers
+      # file lives; git defaults to GPG on a fresh runner.
+      - name: Configure git for SSH signature verification
+        run: |
+          if [ -f .allowed_signers ]; then
+            git config gpg.ssh.allowedSignersFile "$PWD/.allowed_signers"
+            git config gpg.format ssh
+          else
+            echo "::error::Repo is missing .allowed_signers; cannot verify signed tags."
+            exit 1
+          fi
+
+      # Refuse unsigned tags (or tags signed by a key not in
+      # .allowed_signers). TAG_REF comes via env, not string interpolation.
+      - name: Verify tag is signed
+        env:
+          TAG_REF: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if ! git verify-tag "$TAG_REF" 2>&1; then
+            echo "::error::Tag '$TAG_REF' is not signed."
+            echo "Sign with: git tag -s '$TAG_REF' -m 'release notes'"
+            echo "Or use the maintainer recipe: just release X.Y.Z"
+            exit 1
+          fi
+          echo "Tag '$TAG_REF' signature verified."
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$RELEASE_TAG" \
+              --generate-notes \
+              --verify-tag
+          fi
+
+  build-and-publish:
+    name: Build, sign, and push ${{ matrix.slug }}
+    needs: verify-signed-tag
+    runs-on: ubuntu-latest
+    strategy:
+      # Don't cancel siblings on one failure — see all failure modes at once.
+      fail-fast: false
+      matrix:
+        # The backend directory slugs (snake_case). Keep in sync with the
+        # justfile ``slugs`` variable. ``echo`` is the demo/smoke backend;
+        # drop it here if you don't want an official echo image.
+        slug: [echo, energyplus_single_zone, modelica_diagram]
+
+    permissions:
+      # OIDC token exchange (GHCR push, GCP WIF, and the attestation step).
+      id-token: write
+      # attest-build-provenance writes to the transparency log.
+      attestations: write
+      # SBOM upload to the release.
+      contents: write
+      # Push images to GHCR.
+      packages: write
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4.0.0
+
+      # ``uv`` builds the in-repo shared runtime wheel that the backend
+      # Dockerfiles install from ``_vendor/``. SHA-pinned like the other
+      # actions (same pin validibot uses).
+      - name: Set up uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+
+      # Stage the vendored wheel the Dockerfile expects at
+      # ``<slug>/backend/_vendor/``. Only the in-repo ``purelms-itask-runtime``
+      # wheel is built here; ``purelms-shared`` is on PyPI and the
+      # Dockerfile's ``pip --find-links`` install (no ``--no-index``)
+      # resolves it from there. This mirrors ``just _stage-shared-wheel``
+      # minus the sibling-repo build, since CI has PyPI.
+      - name: Stage the shared runtime wheel
+        env:
+          SLUG: ${{ matrix.slug }}
+        run: |
+          mkdir -p "${SLUG}/backend/_vendor"
+          uv build --wheel _shared_backends/purelms_itask_runtime \
+            --out-dir "${SLUG}/backend/_vendor"
+
+      # ── Primary registry: GHCR (always pushed) ────────────────────────
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121  # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image references
+        id: image-ref
+        env:
+          OWNER: ${{ github.repository_owner }}
+          SLUG: ${{ matrix.slug }}
+          TAG_REF: ${{ inputs.tag || github.ref_name }}
+        run: |
+          # GHCR namespace must be lower-case; image name uses hyphens.
+          OWNER_LC="$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')"
+          IMAGE_SLUG="$(echo "$SLUG" | tr '_' '-')"
+          GHCR_IMAGE="ghcr.io/${OWNER_LC}/purelms-itask-${IMAGE_SLUG}"
+          {
+            echo "ghcr_image=${GHCR_IMAGE}"
+            echo "image_slug=${IMAGE_SLUG}"
+            echo "tag=${TAG_REF}"
+            echo "ghcr_full_ref=${GHCR_IMAGE}:${TAG_REF}"
+          } >> "$GITHUB_OUTPUT"
+
+      # One build that emits the image, an OCI-attached SPDX SBOM, and
+      # BuildKit provenance. attest-build-provenance (next) layers the
+      # sigstore-signed attestation on top of this digest.
+      - name: Build and push to GHCR with SBOM
+        id: build-push-ghcr
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7.1.0
+        with:
+          context: ${{ matrix.slug }}/backend
+          file: ${{ matrix.slug }}/backend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.image-ref.outputs.ghcr_full_ref }}
+            ${{ steps.image-ref.outputs.ghcr_image }}:latest
+          provenance: mode=max
+          sbom: true
+
+      - name: Generate sigstore attestation for GHCR image digest
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
+        with:
+          subject-name: ${{ steps.image-ref.outputs.ghcr_image }}
+          subject-digest: ${{ steps.build-push-ghcr.outputs.digest }}
+          push-to-registry: true
+
+      # ── Optional secondary registry: PureLMS's GAR ────────────────────
+      # Gated on THIS repo's GCP_PROJECT_ID variable. The same digest (same
+      # bytes) carries the same attestation, so the GAR copy verifies too.
+      - name: Authenticate to Google Cloud (Workload Identity Federation)
+        if: vars.GCP_PROJECT_ID != ''
+        id: gcp-auth
+        uses: google-github-actions/auth@b7593ed2efd1c1617e1b0254da33b86225adb2a5  # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Configure Docker for Artifact Registry
+        if: vars.GCP_PROJECT_ID != ''
+        env:
+          GCP_REGION: ${{ vars.GCP_REGION }}
+        run: |
+          gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+      - name: Mirror image from GHCR to PureLMS GAR
+        if: vars.GCP_PROJECT_ID != ''
+        env:
+          GHCR_IMAGE: ${{ steps.image-ref.outputs.ghcr_image }}
+          GHCR_DIGEST: ${{ steps.build-push-ghcr.outputs.digest }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          GCP_GAR_REPOSITORY: ${{ vars.GCP_GAR_REPOSITORY }}
+          IMAGE_SLUG: ${{ steps.image-ref.outputs.image_slug }}
+          TAG_REF: ${{ inputs.tag || github.ref_name }}
+        run: |
+          GAR_REGISTRY="${GCP_REGION}-docker.pkg.dev"
+          GAR_IMAGE="${GAR_REGISTRY}/${GCP_PROJECT_ID}/${GCP_GAR_REPOSITORY}/purelms-itask-${IMAGE_SLUG}"
+          # crane copies the manifest + layers verbatim, preserving the
+          # digest (a docker re-push would rebuild and the digest would drift).
+          curl -sSfL https://github.com/google/go-containerregistry/releases/download/v0.20.6/go-containerregistry_Linux_x86_64.tar.gz \
+            | tar -xz -C /usr/local/bin crane
+          crane copy "${GHCR_IMAGE}@${GHCR_DIGEST}" "${GAR_IMAGE}:${TAG_REF}"
+          crane copy "${GHCR_IMAGE}@${GHCR_DIGEST}" "${GAR_IMAGE}:latest"
+
+      # ── SBOM extraction + release upload (always) ─────────────────────
+      - name: Generate SPDX SBOM from image
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610  # v0.24.0
+        with:
+          image: ${{ steps.image-ref.outputs.ghcr_full_ref }}
+          format: spdx-json
+          output-file: purelms-itask-${{ steps.image-ref.outputs.image_slug }}.spdx.json
+          upload-artifact: false
+
+      - name: Upload SBOM as workflow artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: sbom-${{ matrix.slug }}
+          path: purelms-itask-${{ steps.image-ref.outputs.image_slug }}.spdx.json
+          retention-days: 90
+
+      - name: Attach SBOM to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          IMAGE_SLUG: ${{ steps.image-ref.outputs.image_slug }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            "purelms-itask-${IMAGE_SLUG}.spdx.json" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber

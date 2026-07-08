@@ -1,4 +1,4 @@
-"""Run a scenario's pre-compiled FMU with the learner's parameters (ADR-0019).
+"""Run a scenario's pre-compiled FMU with the learner's parameters.
 
 ``fmpy.simulate_fmu`` executes native FMU code; a divergent solver can hang a
 process indefinitely, so the simulation runs in a SEPARATE process with a
@@ -8,7 +8,7 @@ already correct.
 
 NOT executed in-repo: running the FMU needs the compiled ``model.fmu``
 (``linux64``) and ``fmpy`` present, so the smoke + golden-vector tests run
-in-container on ``linux/amd64`` (ADR-0019 Check 1). The pure-Python parameter
+in-container on ``linux/amd64`` (Check 1). The pure-Python parameter
 mapping + output summarisation here are unit-testable independently.
 """
 
@@ -21,7 +21,7 @@ from typing import Any
 
 # Cap the time series persisted to the output envelope; the LMS stores
 # ``outputs_payload`` in Postgres and returns it on every status poll, so an
-# unbounded series would bloat both (ADR-0019).
+# unbounded series would bloat both.
 MAX_SERIES_POINTS = 500
 _KILL_GRACE_SECONDS = 5
 
@@ -58,10 +58,11 @@ def summarize(time, recorded: dict, scenario: dict) -> dict[str, Any]:
         values = list(recorded.get(var, []))
         if not values:
             continue
+        # Coerce out of numpy scalars so the output envelope is JSON-clean.
         if spec.get("summarize") == "integral":
-            out[name] = _trapezoid(time, values)
+            out[name] = float(_trapezoid(time, values))
         else:  # "final" (default)
-            out[name] = values[-1]
+            out[name] = float(values[-1])
         series_var = series_var or var
     if series_var is not None:
         out["series_json"] = json.dumps(

@@ -1,4 +1,4 @@
-"""``modelica_diagram`` backend — container entrypoint (ADR-0019).
+"""``modelica_diagram`` backend — container entrypoint.
 
 Reads the input envelope, grades the learner's diagram (structural
 ``purelms.diagram.v1`` validation + scenario topology check), and — only if the

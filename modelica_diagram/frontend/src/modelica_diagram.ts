@@ -21,11 +21,15 @@ import { createCanvas } from "./canvas";
 import type { CanvasHandle } from "./canvas";
 import { injectStyles } from "./styles";
 import type {
+  Diagram,
+  Layout,
   ModelicaConfig,
+  ModelicaLastRun,
   ModelicaOutputs,
   MountFn,
   MountHelpers,
   Scenario,
+  SimulationRunMessage,
   SimulationRunStatusResponse,
 } from "./types";
 import scenarioJson from "./vendor/hydronic_loop.scenario.json";
@@ -34,8 +38,10 @@ const SCENARIO = scenarioJson as unknown as Scenario;
 
 // Mirrors the manifest's numeric parameters (bounds + defaults).
 const PARAMS = {
-  boiler_nominal_power_kw: { label: "Boiler power", unit: "kW", def: 10, min: 1, max: 50, step: 1 },
-  temperature_setpoint_c: { label: "Setpoint", unit: "°C", def: 60, min: 30, max: 90, step: 1 },
+  boiler_nominal_power_kw: { label: "Boiler power", unit: "kW", def: 10, min: 2, max: 20, step: 1 },
+  room_setpoint_c: { label: "Target room temp", unit: "°C", def: 21, min: 16, max: 26, step: 1 },
+  heat_loss_w_per_k: { label: "Heat loss", unit: "W/K", def: 150, min: 50, max: 400, step: 10 },
+  outdoor_temp_c: { label: "Outdoor temp", unit: "°C", def: 0, min: -15, max: 15, step: 1 },
 } as const;
 type ParamKey = keyof typeof PARAMS;
 
@@ -66,7 +72,8 @@ export const mount: MountFn = async (element, configRaw, helpers): Promise<void>
   // ---- Canvas (right) ----
   const hint = el("div", "mdl-hint");
   hint.textContent =
-    "Click a component to add it, then drag from an output port (right) to an input port (left).";
+    "Click a component to add it, then drag from an output port (right) to an " +
+    "input port (left). Double-click a wire to add a point you can drag.";
   const canvasEl = el("div", "mdl-canvas");
   stage.append(hint, canvasEl);
 
@@ -97,7 +104,7 @@ export const mount: MountFn = async (element, configRaw, helpers): Promise<void>
   runBtn.textContent = "Run simulation";
   const clearBtn = el("button", "mdl-secondary");
   clearBtn.type = "button";
-  clearBtn.textContent = "Clear canvas";
+  clearBtn.textContent = "Start over";
   toolbar.append(runBtn, clearBtn);
 
   const statusEl = el("div", "mdl-status");
@@ -114,12 +121,17 @@ export const mount: MountFn = async (element, configRaw, helpers): Promise<void>
 
   clearBtn.addEventListener("click", () => {
     canvas?.clear();
+    paramInputs.reset();
     resultsEl.replaceChildren();
     statusEl.textContent = "";
   });
   runBtn.addEventListener("click", () => {
     void handleSubmit({ canvas, paramInputs, runBtn, statusEl, resultsEl, helpers });
   });
+
+  // Restore the learner's last attempt (diagram + last result). The sliders are
+  // already seeded from config.last_run inside buildParams.
+  restoreLastRun(config.last_run, canvas, statusEl, resultsEl);
 };
 
 export default mount;
@@ -131,11 +143,15 @@ export default mount;
 interface ParamInputs {
   rows: HTMLElement[];
   inputs: Map<ParamKey, HTMLInputElement>;
+  /** Reset every slider to its default (author override or spec default). */
+  reset(): void;
 }
 
 function buildParams(config: ModelicaConfig): ParamInputs {
   const rows: HTMLElement[] = [];
   const inputs = new Map<ParamKey, HTMLInputElement>();
+  const resets: Array<() => void> = [];
+  const restored = config.last_run?.parameters ?? {};
 
   for (const key of Object.keys(PARAMS) as ParamKey[]) {
     const spec = PARAMS[key];
@@ -143,7 +159,9 @@ function buildParams(config: ModelicaConfig): ParamInputs {
     const min = override?.min ?? spec.min;
     const max = override?.max ?? spec.max;
     const step = override?.step ?? spec.step;
-    const value = override?.default ?? spec.def;
+    const fallback = override?.default ?? spec.def;
+    const prior = restored[key];
+    const value = typeof prior === "number" ? prior : fallback;
 
     const row = el("div", "mdl-field");
     const label = el("label");
@@ -151,7 +169,6 @@ function buildParams(config: ModelicaConfig): ParamInputs {
     const labelText = el("span");
     labelText.textContent = spec.label;
     const valueText = el("span", "mdl-val");
-    valueText.textContent = `${value} ${spec.unit}`;
     label.append(labelText, valueText);
 
     const input = el("input");
@@ -160,13 +177,19 @@ function buildParams(config: ModelicaConfig): ParamInputs {
     input.min = String(min);
     input.max = String(max);
     input.step = String(step);
-    input.value = String(value);
     if (override?.enabled === false) {
       input.disabled = true;
     }
-    input.addEventListener("input", () => {
+    const sync = (): void => {
       valueText.textContent = `${input.value} ${spec.unit}`;
-    });
+    };
+    input.addEventListener("input", sync);
+    const apply = (next: number): void => {
+      input.value = String(next);
+      sync();
+    };
+    apply(value);
+    resets.push(() => apply(fallback));
 
     row.append(label, input);
     if (override?.visible === false) {
@@ -176,7 +199,15 @@ function buildParams(config: ModelicaConfig): ParamInputs {
     inputs.set(key, input);
   }
 
-  return { rows, inputs };
+  return {
+    rows,
+    inputs,
+    reset: () => {
+      for (const r of resets) {
+        r();
+      }
+    },
+  };
 }
 
 function readParams(paramInputs: ParamInputs): Record<ParamKey, number> {
@@ -222,6 +253,7 @@ async function handleSubmit(args: SubmitArgs): Promise<void> {
   const parameters = {
     scenario: SCENARIO.id,
     diagram_json: JSON.stringify(diagram),
+    layout_json: JSON.stringify(canvas.serializeLayout()),
     ...readParams(paramInputs),
   };
 
@@ -269,24 +301,36 @@ function renderResult(
 ): void {
   if (status.status !== "success") {
     setStatus(`Run failed: ${status.status}.`);
-    resultsEl.append(messageList(status, true));
+    resultsEl.append(messageList(status.messages ?? [], true));
     return;
   }
-
   setStatus(`Done (${(status.runtime_seconds ?? 0).toFixed(2)}s).`);
-  const outputs = status.outputs as Partial<ModelicaOutputs>;
+  renderSuccessOutputs(
+    status.outputs as Partial<ModelicaOutputs>,
+    status.messages ?? [],
+    resultsEl,
+  );
+}
 
+/** Render the verdict + notes + result cards + chart for a successful run.
+ * Shared by the live-run path and the restore path. */
+function renderSuccessOutputs(
+  outputs: Partial<ModelicaOutputs>,
+  messages: SimulationRunMessage[],
+  resultsEl: HTMLElement,
+): void {
   const verdict = el("div", `mdl-verdict ${outputs.topology_correct ? "ok" : "no"}`);
   verdict.textContent = outputs.topology_correct
     ? "Your diagram matches the system."
     : "Not quite — check the notes below.";
-  resultsEl.append(verdict, messageList(status, false));
+  resultsEl.append(verdict, messageList(messages, false));
 
   if (outputs.topology_correct) {
     const cards = el("div", "mdl-cards");
     cards.append(
       valueCard("Final room temp", outputs.room_temp_final_c, "°C"),
-      valueCard("Energy used", outputs.energy_used_kwh, "kWh"),
+      valueCard("Heat delivered", outputs.energy_used_kwh, "kWh"),
+      reachCard(outputs.time_to_setpoint_min),
     );
     resultsEl.append(cards);
     if (outputs.series_json) {
@@ -298,12 +342,49 @@ function renderResult(
   }
 }
 
+/** Restore the learner's last attempt: rebuild the canvas from the stored
+ * diagram and re-render the last result. Sliders are restored in buildParams. */
+function restoreLastRun(
+  lastRun: ModelicaLastRun | undefined,
+  canvas: CanvasHandle | null,
+  statusEl: HTMLElement,
+  resultsEl: HTMLElement,
+): void {
+  if (!lastRun) {
+    return;
+  }
+  const diagramJson = lastRun.parameters?.["diagram_json"];
+  const layoutJson = lastRun.parameters?.["layout_json"];
+  let restoredDiagram = false;
+  if (canvas && typeof diagramJson === "string") {
+    try {
+      const diagram = JSON.parse(diagramJson) as Diagram;
+      const layout =
+        typeof layoutJson === "string"
+          ? (JSON.parse(layoutJson) as Layout)
+          : undefined;
+      if (Array.isArray(diagram.nodes) && diagram.nodes.length > 0) {
+        canvas.restore(diagram, layout);
+        restoredDiagram = true;
+      }
+    } catch {
+      // Malformed stored diagram/layout — leave the canvas empty.
+    }
+  }
+  if (lastRun.outputs) {
+    renderSuccessOutputs(lastRun.outputs, lastRun.messages ?? [], resultsEl);
+    statusEl.textContent = "Showing your last result — adjust and run again.";
+  } else if (restoredDiagram) {
+    statusEl.textContent = "Restored your last diagram — run it again to simulate.";
+  }
+}
+
 function messageList(
-  status: SimulationRunStatusResponse,
+  messages: SimulationRunMessage[],
   errorsOnly: boolean,
 ): HTMLElement {
   const list = el("ul", "mdl-msgs");
-  for (const msg of status.messages ?? []) {
+  for (const msg of messages) {
     if (msg.level === "debug") {
       continue;
     }
@@ -326,6 +407,25 @@ function valueCard(label: string, value: number | undefined, unit: string): HTML
     typeof value === "number"
       ? `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${unit}`
       : "—";
+  card.append(k, v);
+  return card;
+}
+
+/** Like valueCard, but renders the simulation length as "didn't reach": an
+ * undersized boiler never gets to the setpoint, so tReach_min comes back at the
+ * cap (the run length). */
+function reachCard(minutes: number | undefined): HTMLElement {
+  const card = el("div", "mdl-card");
+  const k = el("div", "k");
+  k.textContent = "Time to reach setpoint";
+  const v = el("div", "v");
+  if (typeof minutes !== "number") {
+    v.textContent = "—";
+  } else if (minutes >= 179) {
+    v.textContent = "didn’t reach";
+  } else {
+    v.textContent = `${minutes.toLocaleString(undefined, { maximumFractionDigits: 0 })} min`;
+  }
   card.append(k, v);
   return card;
 }

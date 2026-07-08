@@ -1,4 +1,4 @@
-"""Topology checker for the ``modelica_diagram`` InteractiveTask (ADR-0019).
+"""Topology checker for the ``modelica_diagram`` InteractiveTask.
 
 Pure-Python, dependency-free: takes a learner's parsed diagram (the
 ``purelms.diagram.v1`` graph) plus a scenario definition and decides whether
@@ -220,15 +220,18 @@ def _build_key(
     t_port: str,
     t_meta: dict,
 ) -> tuple[tuple | None, str | None]:
-    """Per-kind canonical edge key (fluid undirected / signal directed)."""
+    """Per-kind canonical edge key: fluid + heat undirected, signal directed."""
     if s_meta["kind"] != t_meta["kind"]:
         return None, (
-            "You can't connect a fluid port to a signal port — check the "
-            "connection types."
+            "Those two ports are different types and can't be connected — "
+            "match fluid to fluid, heat to heat, signal to signal."
         )
-    if s_meta["kind"] == "fluid":
-        return ("fluid", frozenset({(s_type, s_port), (t_type, t_port)})), None
-    # signal: must run output -> input
+    # fluid (water) and heat (thermal) connectors are acausal — an edge's
+    # identity is the unordered pair of endpoints, so a reversed but otherwise
+    # identical connection still matches.
+    if s_meta["kind"] in ("fluid", "heat"):
+        return (s_meta["kind"], frozenset({(s_type, s_port), (t_type, t_port)})), None
+    # signal: causal, must run output -> input
     if s_meta.get("direction") != "out" or t_meta.get("direction") != "in":
         return None, "A signal connection must run from an output to an input."
     return ("signal", (s_type, s_port), (t_type, t_port)), None
@@ -236,7 +239,7 @@ def _build_key(
 
 def _render_edge(key: tuple, labels: dict[str, str]) -> str:
     """Render a canonical edge key as a learner-readable phrase."""
-    if key[0] == "fluid":
+    if key[0] in ("fluid", "heat"):
         (a_type, a_port), (b_type, b_port) = sorted(key[1])
         return (
             f"the {labels.get(a_type, a_type)} ({a_port}) and the "

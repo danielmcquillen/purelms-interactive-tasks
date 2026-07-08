@@ -1,0 +1,9 @@
+// Compile HydronicLoop.mo to an FMI 2.0 co-simulation FMU.
+// Run after setup.mos has installed Buildings.
+loadModel(Buildings); getErrorString();
+loadFile("/work/HydronicLoop.mo"); getErrorString();
+// Embed CVODE (adaptive, stiff-capable) as the co-simulation FMU's internal
+// solver. The default (euler) blows up on this stiff fluid loop; CVODE matches
+// the native DASSL run.
+setCommandLineOptions("--fmiFlags=s:cvode"); getErrorString();
+buildModelFMU(HydronicLoop, version = "2.0", fmuType = "cs"); getErrorString();

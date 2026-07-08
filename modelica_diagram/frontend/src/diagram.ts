@@ -11,7 +11,13 @@
  * back the graph the backend validates against diagram.v1 + topology-checks.
  */
 
-import type { Diagram, DiagramEdge, DrawflowExport, Scenario } from "./types";
+import type {
+  Diagram,
+  DiagramEdge,
+  DrawflowExport,
+  Layout,
+  Scenario,
+} from "./types";
 
 export interface PortMaps {
   [type: string]: { inputs: string[]; outputs: string[] };
@@ -92,4 +98,48 @@ export function drawflowToDiagram(
   }
 
   return { schema: "purelms.diagram.v1", nodes, edges };
+}
+
+/**
+ * Extract the neutral canvas layout — node positions + edge reroute waypoints —
+ * from a Drawflow ``export()`` object. Kept SEPARATE from
+ * {@link drawflowToDiagram} so the semantic graph stays free of UI coordinates;
+ * the two travel as sibling parameters (``diagram_json`` + ``layout_json``).
+ */
+export function buildLayout(exported: DrawflowExport, scenario: Scenario): Layout {
+  const maps = buildPortMaps(scenario);
+  const data = exported.drawflow?.Home?.data ?? {};
+  const positions: Record<string, { x: number; y: number }> = {};
+  const waypoints: Record<string, Array<{ x: number; y: number }>> = {};
+
+  for (const node of Object.values(data)) {
+    positions[String(node.id)] = { x: node.pos_x, y: node.pos_y };
+    const srcMap = maps[node.data.type];
+    if (!srcMap) {
+      continue;
+    }
+    for (const [outKey, outPort] of Object.entries(node.outputs ?? {})) {
+      const srcPort = srcMap.outputs[portIndex(outKey)];
+      if (srcPort === undefined) {
+        continue;
+      }
+      for (const conn of outPort.connections ?? []) {
+        if (!conn.points || conn.points.length === 0) {
+          continue;
+        }
+        const target = data[String(conn.node)];
+        if (!target) {
+          continue;
+        }
+        const tgtPort = maps[target.data.type]?.inputs[portIndex(conn.output)];
+        if (tgtPort === undefined) {
+          continue;
+        }
+        const key = `${node.id}|${srcPort}|${target.id}|${tgtPort}`;
+        waypoints[key] = conn.points.map((p) => ({ x: p.pos_x, y: p.pos_y }));
+      }
+    }
+  }
+
+  return { positions, waypoints };
 }

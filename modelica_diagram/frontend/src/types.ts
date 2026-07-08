@@ -99,11 +99,26 @@ export interface NumberParamConfig {
   step?: number;
 }
 
+/** The learner's most recent run for this placement, injected by the LMS into
+ * the bundle config so the canvas + sliders + last result can be restored on
+ * return (instead of starting from an empty canvas). */
+export interface ModelicaLastRun {
+  /** Submitted parameters — includes ``diagram_json`` plus the slider values. */
+  parameters?: Record<string, unknown>;
+  /** Result outputs; present only when the run succeeded. */
+  outputs?: ModelicaOutputs;
+  /** Backend messages from that run. */
+  messages?: SimulationRunMessage[];
+}
+
 export interface ModelicaConfig {
   parameters?: {
     boiler_nominal_power_kw?: NumberParamConfig;
-    temperature_setpoint_c?: NumberParamConfig;
+    room_setpoint_c?: NumberParamConfig;
+    heat_loss_w_per_k?: NumberParamConfig;
+    outdoor_temp_c?: NumberParamConfig;
   };
+  last_run?: ModelicaLastRun;
 }
 
 /** Strong-typed view of the backend's terminal outputs. */
@@ -111,6 +126,7 @@ export interface ModelicaOutputs {
   topology_correct: boolean;
   room_temp_final_c?: number;
   energy_used_kwh?: number;
+  time_to_setpoint_min?: number;
   series_json?: string;
 }
 
@@ -118,7 +134,7 @@ export interface ModelicaOutputs {
 // 2. Scenario (mirrors scenario.json)
 // ---------------------------------------------------------------------
 
-export type PortKind = "fluid" | "signal";
+export type PortKind = "fluid" | "heat" | "signal";
 export type UiSide = "input" | "output";
 
 export interface ScenarioPort {
@@ -128,6 +144,8 @@ export interface ScenarioPort {
   direction?: "in" | "out";
   /** Which side of the node the port renders on in the canvas. */
   ui_side?: UiSide;
+  /** Display text for the port; falls back to ``name`` when absent. */
+  label?: string;
 }
 
 export interface PaletteEntry {
@@ -171,12 +189,27 @@ export interface Diagram {
   edges: DiagramEdge[];
 }
 
+/**
+ * Neutral, library-agnostic canvas layout — node positions + edge reroute
+ * waypoints in canvas pixel coordinates. Stored ALONGSIDE (never inside) the
+ * semantic ``diagram.v1`` graph, whose schema is deliberately closed and
+ * semantic-only. Positions are keyed by diagram node id; waypoints by
+ * ``src|srcPort|tgt|tgtPort``. The backend ignores it; only the canvas adapter
+ * reads it, so the stored data stays free of any Drawflow-specific shape.
+ */
+export interface Layout {
+  positions: Record<string, { x: number; y: number }>;
+  waypoints: Record<string, Array<{ x: number; y: number }>>;
+}
+
 /** A single connection recorded on a Drawflow OUTPUT port. ``output``
  * (Drawflow's confusing field name) is the TARGET node's input class,
  * e.g. ``"input_1"``. */
 export interface DrawflowOutputConnection {
   node: string;
   output: string;
+  /** Reroute waypoints Drawflow stores on the connection (its own format). */
+  points?: Array<{ pos_x: number; pos_y: number }>;
 }
 
 export interface DrawflowNode {
@@ -185,6 +218,8 @@ export interface DrawflowNode {
   data: { type: string } & Record<string, unknown>;
   inputs: Record<string, { connections: unknown[] }>;
   outputs: Record<string, { connections: DrawflowOutputConnection[] }>;
+  pos_x: number;
+  pos_y: number;
 }
 
 export interface DrawflowExport {

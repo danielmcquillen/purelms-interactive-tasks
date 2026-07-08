@@ -1,4 +1,4 @@
-"""Grade a learner's diagram for the ``modelica_diagram`` task (ADR-0019).
+"""Grade a learner's diagram for the ``modelica_diagram`` task.
 
 Two steps, both BEFORE any FMU runs:
 

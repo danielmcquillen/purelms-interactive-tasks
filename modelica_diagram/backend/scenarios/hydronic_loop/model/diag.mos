@@ -1,0 +1,8 @@
+// Diagnostic: simulate with OpenModelica's native (robust, adaptive) solver to
+// tell whether the model is sound or the CS-FMU embedded solver is the problem.
+loadModel(Buildings); getErrorString();
+loadFile("/work/HydronicLoop.mo"); getErrorString();
+simulate(HydronicLoop, stopTime = 10800, numberOfIntervals = 1000); getErrorString();
+"=== final values (native solver) ===";
+val(TRoo_degC, 10800);
+val(EHea_kWh, 10800);
