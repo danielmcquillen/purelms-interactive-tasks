@@ -40,6 +40,7 @@ fallback that runs outside any container) works without them installed.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 import time
@@ -67,6 +68,17 @@ _CALLBACK_TIMEOUT_SECONDS = 10
 # Backoff is 1, 2, 4, 8s between 5 attempts (~15s total worst case).
 _COMPLETE_MAX_ATTEMPTS = 5
 _COMPLETE_BACKOFF_BASE_SECONDS = 1.0
+_DEFAULT_MAX_ENVELOPE_BYTES = 5 * 1024 * 1024
+_SHA256_HEX_LENGTH = 64
+
+
+@dataclass(frozen=True)
+class ObjectIdentity:
+    """Content and object-store identity for one immutable envelope."""
+
+    sha256: str
+    size_bytes: int
+    generation: int | None = None
 
 
 class CompleteCallbackError(RuntimeError):
@@ -138,6 +150,9 @@ class RuntimeLocation:
     output_uri: str | None
     input_dir: Path
     output_dir: Path
+    input_sha256: str | None = None
+    input_size_bytes: int | None = None
+    input_generation: int | None = None
 
     @classmethod
     def from_env(cls) -> RuntimeLocation:
@@ -153,12 +168,44 @@ class RuntimeLocation:
         input_uri = os.environ.get("PURELMS_INPUT_URI") or None
         output_uri = os.environ.get("PURELMS_OUTPUT_URI") or None
         _validate_uri_mode(input_uri, output_uri)
+        input_sha256 = os.environ.get("PURELMS_INPUT_SHA256") or None
+        input_size_raw = os.environ.get("PURELMS_INPUT_SIZE_BYTES") or None
+        input_generation_raw = os.environ.get("PURELMS_INPUT_GENERATION") or None
+        input_size = int(input_size_raw) if input_size_raw is not None else None
+        input_generation = (
+            int(input_generation_raw) if input_generation_raw is not None else None
+        )
+        if (input_sha256 is None) != (input_size is None):
+            msg = (
+                "PURELMS_INPUT_SHA256 and PURELMS_INPUT_SIZE_BYTES must be set together"
+            )
+            raise RuntimeConfigError(msg)
+        if input_sha256 is not None and (
+            len(input_sha256) != _SHA256_HEX_LENGTH
+            or any(ch not in "0123456789abcdef" for ch in input_sha256)
+        ):
+            msg = "PURELMS_INPUT_SHA256 must be 64 lowercase hexadecimal characters"
+            raise RuntimeConfigError(msg)
+        if input_size is not None and input_size < 0:
+            msg = "PURELMS_INPUT_SIZE_BYTES must be non-negative"
+            raise RuntimeConfigError(msg)
+        if (
+            input_uri is not None
+            and input_sha256 is not None
+            and input_generation is None
+        ):
+            msg = "PURELMS_INPUT_GENERATION is required for strict GCS input"
+            raise RuntimeConfigError(msg)
+
         return cls(
             run_id=os.environ.get("PURELMS_RUN_ID", "unknown"),
             input_uri=input_uri,
             output_uri=output_uri,
             input_dir=Path(os.environ.get("PURELMS_INPUT_DIR", "/purelms/input")),
             output_dir=Path(os.environ.get("PURELMS_OUTPUT_DIR", "/purelms/output")),
+            input_sha256=input_sha256,
+            input_size_bytes=input_size,
+            input_generation=input_generation,
         )
 
     @property
@@ -177,15 +224,29 @@ def read_input_envelope(location: RuntimeLocation) -> SimulationInputEnvelope:
     on a missing or invalid envelope; the caller maps that to a non-zero
     exit (a contract violation the LMS surfaces via the log tail).
     """
+    max_bytes = _max_envelope_bytes()
     if location.uses_gcs_input:
-        raw = _gcs_download_text(location.input_uri)  # type: ignore[arg-type]
+        raw_bytes = _gcs_download_bytes(
+            location.input_uri,  # type: ignore[arg-type]
+            generation=location.input_generation,
+            max_bytes=max_bytes,
+        )
     else:
         input_path = location.input_dir / "input.json"
         if not input_path.exists():
             msg = f"missing input envelope at {input_path}"
             raise FileNotFoundError(msg)
-        raw = input_path.read_text()
-    return SimulationInputEnvelope.model_validate_json(raw)
+        if input_path.stat().st_size > max_bytes:
+            msg = f"input envelope exceeds {max_bytes} bytes"
+            raise RuntimeConfigError(msg)
+        raw_bytes = input_path.read_bytes()
+    _verify_identity(
+        raw_bytes,
+        expected_sha256=location.input_sha256,
+        expected_size=location.input_size_bytes,
+        label="input envelope",
+    )
+    return SimulationInputEnvelope.model_validate_json(raw_bytes)
 
 
 def write_output_envelope(
@@ -211,17 +272,38 @@ def write_output_envelope(
     propagate (exit non-zero) — the worker's sweeper salvages the run
     from the written envelope instead of refunding a good result.
     """
-    payload = envelope.model_dump_json(indent=2)
+    payload = envelope.model_dump_json(indent=2).encode("utf-8")
+    if len(payload) > _max_envelope_bytes():
+        msg = f"output envelope exceeds {_max_envelope_bytes()} bytes"
+        raise RuntimeConfigError(msg)
+    identity = ObjectIdentity(
+        sha256=hashlib.sha256(payload).hexdigest(),
+        size_bytes=len(payload),
+    )
     if location.uses_gcs_output:
-        _gcs_upload_text(location.output_uri, payload)  # type: ignore[arg-type]
+        generation = _gcs_upload_bytes(
+            location.output_uri,  # type: ignore[arg-type]
+            payload,
+        )
+        identity = ObjectIdentity(
+            sha256=identity.sha256,
+            size_bytes=identity.size_bytes,
+            generation=generation,
+        )
         output_ref = location.output_uri
     else:
         location.output_dir.mkdir(parents=True, exist_ok=True)
         output_path = location.output_dir / "output.json"
-        output_path.write_text(payload)
+        with output_path.open("xb") as output_file:
+            output_file.write(payload)
         output_ref = str(output_path)
 
-    _post_complete(context, output_envelope_uri=output_ref, exit_code=exit_code)
+    _post_complete(
+        context,
+        output_envelope_uri=output_ref,
+        exit_code=exit_code,
+        identity=identity,
+    )
 
 
 def make_progress_reporter(
@@ -274,6 +356,7 @@ def _post_complete(
     *,
     output_envelope_uri: str,
     exit_code: int,
+    identity: ObjectIdentity | None = None,
 ) -> None:
     """POST the authoritative completion callback — async path only.
 
@@ -296,6 +379,9 @@ def _post_complete(
     body = CompleteCallback(
         output_envelope_uri=output_envelope_uri,
         exit_code=exit_code,
+        output_sha256=identity.sha256 if identity else None,
+        output_size_bytes=identity.size_bytes if identity else None,
+        output_generation=identity.generation if identity else None,
     )
     json_body = body.model_dump_json()
     last_exc: Exception | None = None
@@ -374,23 +460,68 @@ def _split_gs_uri(uri: str) -> tuple[str, str]:
     return bucket, blob
 
 
-def _gcs_download_text(uri: str) -> str:
+def _gcs_download_bytes(
+    uri: str,
+    *,
+    generation: int | None,
+    max_bytes: int,
+) -> bytes:
     bucket, blob = _split_gs_uri(uri)
     from google.cloud import storage  # noqa: PLC0415 - cloud extra only
 
     client = storage.Client()
-    return client.bucket(bucket).blob(blob).download_as_text()
+    obj = client.bucket(bucket).blob(blob, generation=generation)
+    obj.reload()
+    if obj.size is None or int(obj.size) > max_bytes:
+        msg = f"GCS envelope {uri!r} exceeds {max_bytes} bytes or has unknown size"
+        raise RuntimeConfigError(msg)
+    kwargs = {"if_generation_match": generation} if generation is not None else {}
+    return obj.download_as_bytes(**kwargs)
 
 
-def _gcs_upload_text(uri: str, text: str) -> None:
+def _gcs_upload_bytes(uri: str, content: bytes) -> int:
     bucket, blob = _split_gs_uri(uri)
     from google.cloud import storage  # noqa: PLC0415 - cloud extra only
 
     client = storage.Client()
-    client.bucket(bucket).blob(blob).upload_from_string(
-        text,
+    obj = client.bucket(bucket).blob(blob)
+    obj.upload_from_string(
+        content,
         content_type="application/json",
         # One output object belongs to one SimulationRun. A provider retry or
         # duplicate execution must not overwrite the first attempt's bytes.
         if_generation_match=0,
     )
+    if obj.generation is None:
+        msg = f"GCS did not return a generation for immutable object {uri!r}"
+        raise RuntimeConfigError(msg)
+    return int(obj.generation)
+
+
+def _max_envelope_bytes() -> int:
+    """Configured hard bound for both input and output envelope bytes."""
+    value = int(
+        os.environ.get("PURELMS_MAX_ENVELOPE_BYTES", _DEFAULT_MAX_ENVELOPE_BYTES)
+    )
+    if value < 1:
+        msg = "PURELMS_MAX_ENVELOPE_BYTES must be positive"
+        raise RuntimeConfigError(msg)
+    return value
+
+
+def _verify_identity(
+    content: bytes,
+    *,
+    expected_sha256: str | None,
+    expected_size: int | None,
+    label: str,
+) -> None:
+    """Fail closed when fetched bytes differ from their launch identity."""
+    if expected_size is not None and len(content) != expected_size:
+        msg = f"{label} size mismatch: expected {expected_size}, got {len(content)}"
+        raise RuntimeConfigError(msg)
+    if expected_sha256 is not None:
+        actual = hashlib.sha256(content).hexdigest()
+        if actual != expected_sha256:
+            msg = f"{label} sha256 mismatch: expected {expected_sha256}, got {actual}"
+            raise RuntimeConfigError(msg)

@@ -27,10 +27,10 @@ dependencies = [
     # Floor pinned to the version that introduced unit_block_id on
     # SimulationInputEnvelope (Slice 3d sweep). Older
     # versions reject the field due to ``extra="forbid"``.
-    "purelms-shared>=0.4.0",
+    "purelms-shared>=0.5.0",
 ]
 
-# purelms-shared is now a published PyPI package — the ``>=0.4.0``
+# purelms-shared is now a published PyPI package — the ``>=0.5.0``
 # floor pin in ``dependencies`` (and in each backend member) is the
 # source of truth. The editable sibling-path override that lived here
 # is gone (audit P0-2 closed; matches validibot-shared's model).

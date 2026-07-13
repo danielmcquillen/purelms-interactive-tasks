@@ -1,8 +1,8 @@
 """
 Tests for the shared backend runtime helper.
 
-The GCS + HTTP seams are monkeypatched (``_gcs_download_text`` /
-``_gcs_upload_text`` / ``_post_json``) so the contract logic — which mode
+The GCS + HTTP seams are monkeypatched (``_gcs_download_bytes`` /
+``_gcs_upload_bytes`` / ``_post_json``) so the contract logic — which mode
 is chosen, what gets written, which callbacks fire — is exercised without
 google-cloud-storage, google-auth, a network, or a real bucket.
 """
@@ -127,7 +127,11 @@ def test_read_input_missing_local_raises(tmp_path):
 def test_read_input_gcs(monkeypatch):
     ctx = _context(progress_url=_PROGRESS_URL, complete_url=_COMPLETE_URL)
     env = _input_envelope(ctx)
-    monkeypatch.setattr(rt, "_gcs_download_text", lambda uri: env.model_dump_json())
+    monkeypatch.setattr(
+        rt,
+        "_gcs_download_bytes",
+        lambda _uri, **_kwargs: env.model_dump_json().encode(),
+    )
 
     loc = RuntimeLocation(
         run_id="r",
@@ -215,12 +219,12 @@ def test_write_output_local_writes_file_and_skips_complete(monkeypatch, tmp_path
 
 
 def test_write_output_gcs_uploads_and_posts_complete(monkeypatch):
-    uploads: list[tuple[str, str]] = []
+    uploads: list[tuple[str, bytes]] = []
     posts: list[tuple[str, str, str]] = []
     monkeypatch.setattr(
         rt,
-        "_gcs_upload_text",
-        lambda uri, text: uploads.append((uri, text)),
+        "_gcs_upload_bytes",
+        lambda uri, content: uploads.append((uri, content)) or 456,
     )
     monkeypatch.setattr(
         rt,
@@ -244,7 +248,7 @@ def test_write_output_gcs_uploads_and_posts_complete(monkeypatch):
     # Uploaded the envelope to the output URI...
     assert len(uploads) == 1
     assert uploads[0][0] == output_uri
-    assert '"status"' in uploads[0][1]
+    assert b'"status"' in uploads[0][1]
     # ...and POSTed the authoritative complete callback carrying that URI.
     assert len(posts) == 1
     url, audience, body = posts[0]
@@ -252,6 +256,8 @@ def test_write_output_gcs_uploads_and_posts_complete(monkeypatch):
     assert audience == _AUDIENCE
     assert output_uri in body
     assert '"exit_code":0' in body.replace(" ", "")
+    assert '"output_generation":456' in body.replace(" ", "")
+    assert '"output_sha256":' in body.replace(" ", "")
 
 
 def test_complete_callback_noops_on_file_sentinel(monkeypatch):
@@ -310,7 +316,7 @@ def test_complete_callback_succeeds_on_retry(monkeypatch):
 def test_write_output_gcs_raises_when_complete_undeliverable(monkeypatch):
     """The envelope is uploaded, but an undeliverable /complete propagates
     as CompleteCallbackError (so the backend exits non-zero)."""
-    monkeypatch.setattr(rt, "_gcs_upload_text", lambda _uri, _text: None)
+    monkeypatch.setattr(rt, "_gcs_upload_bytes", lambda _uri, _content: 456)
     monkeypatch.setattr(rt, "_post_json", _boom)
     monkeypatch.setattr(rt.time, "sleep", lambda _s: None)
 
@@ -324,6 +330,40 @@ def test_write_output_gcs_raises_when_complete_undeliverable(monkeypatch):
     )
     with pytest.raises(rt.CompleteCallbackError):
         write_output_envelope(loc, _output_envelope(uuid4()), ctx)
+
+
+def test_read_input_rejects_hash_mismatch(tmp_path):
+    """The runtime must not execute bytes that differ from the launch claim."""
+    ctx = _context(progress_url=_FILE_SENTINEL, complete_url=_FILE_SENTINEL)
+    env = _input_envelope(ctx)
+    raw = env.model_dump_json().encode()
+    input_dir = tmp_path / "in"
+    input_dir.mkdir()
+    (input_dir / "input.json").write_bytes(raw)
+    loc = RuntimeLocation(
+        run_id="r",
+        input_uri=None,
+        output_uri=None,
+        input_dir=input_dir,
+        output_dir=tmp_path / "out",
+        input_sha256="0" * 64,
+        input_size_bytes=len(raw),
+    )
+
+    with pytest.raises(rt.RuntimeConfigError, match="sha256 mismatch"):
+        read_input_envelope(loc)
+
+
+def test_from_env_requires_generation_for_strict_gcs_input(monkeypatch):
+    """A strict cloud launch must pin the exact object generation."""
+    monkeypatch.setenv("PURELMS_INPUT_URI", "gs://bucket/runs/1/input.json")
+    monkeypatch.setenv("PURELMS_OUTPUT_URI", "gs://bucket/runs/1/output.json")
+    monkeypatch.setenv("PURELMS_INPUT_SHA256", "a" * 64)
+    monkeypatch.setenv("PURELMS_INPUT_SIZE_BYTES", "123")
+    monkeypatch.delenv("PURELMS_INPUT_GENERATION", raising=False)
+
+    with pytest.raises(rt.RuntimeConfigError, match="INPUT_GENERATION"):
+        RuntimeLocation.from_env()
 
 
 # ---------------------------------------------------------------------

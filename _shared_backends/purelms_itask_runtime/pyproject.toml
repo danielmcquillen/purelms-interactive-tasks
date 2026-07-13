@@ -14,7 +14,7 @@ authors = [
 ]
 dependencies = [
     # Envelope + callback schemas. Same floor pin as every backend.
-    "purelms-shared>=0.4.0",
+    "purelms-shared>=0.5.0",
 ]
 
 [project.optional-dependencies]
