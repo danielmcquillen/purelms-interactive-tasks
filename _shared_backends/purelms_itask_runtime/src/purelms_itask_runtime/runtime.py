@@ -390,4 +390,7 @@ def _gcs_upload_text(uri: str, text: str) -> None:
     client.bucket(bucket).blob(blob).upload_from_string(
         text,
         content_type="application/json",
+        # One output object belongs to one SimulationRun. A provider retry or
+        # duplicate execution must not overwrite the first attempt's bytes.
+        if_generation_match=0,
     )
