@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
+
+import tomllib
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 JUSTFILE = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
@@ -11,6 +14,11 @@ RELEASE_WORKFLOW = (REPO_ROOT / ".github/workflows/release.yml").read_text(
     encoding="utf-8"
 )
 RELEASING = (REPO_ROOT / "RELEASING.md").read_text(encoding="utf-8")
+
+
+def _version_tuple(raw: str) -> tuple[int, ...]:
+    """Return the numeric release tuple from a version or caret constraint."""
+    return tuple(int(part) for part in raw.lstrip("^~<>= ").split(".")[:3])
 
 
 def _recipe(name: str, next_name: str) -> str:
@@ -57,6 +65,55 @@ def test_release_gar_setup_scopes_identity_and_writer_role() -> None:
     assert "roles/artifactregistry.writer" in JUSTFILE
     assert "gcloud artifacts repositories add-iam-policy-binding" in JUSTFILE
     assert "gh variable set GCP_WORKLOAD_IDENTITY_PROVIDER" in JUSTFILE
+
+
+def test_python_lock_uses_patched_cryptography() -> None:
+    """The backend lock cannot regress below the OpenSSL security patch."""
+    lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text(encoding="utf-8"))
+    cryptography = next(
+        package for package in lock["package"] if package["name"] == "cryptography"
+    )
+
+    assert _version_tuple(cryptography["version"]) >= (48, 0, 1)
+
+
+def test_frontend_locks_use_patched_test_toolchain() -> None:
+    """Shipped frontend locks keep Vite, Vitest, and Happy DOM above advisories."""
+    for slug in ("echo", "energyplus_single_zone", "modelica_diagram"):
+        lock_path = REPO_ROOT / slug / "frontend/package-lock.json"
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        packages = lock["packages"]
+
+        vite_packages = [
+            package
+            for path, package in packages.items()
+            if path == "node_modules/vite" or path.endswith("/node_modules/vite")
+        ]
+        assert vite_packages
+        assert all(
+            _version_tuple(package["version"]) >= (8, 0, 16)
+            for package in vite_packages
+        )
+        assert _version_tuple(packages["node_modules/vitest"]["version"]) >= (
+            3,
+            2,
+            6,
+        )
+        assert _version_tuple(packages["node_modules/happy-dom"]["version"]) >= (
+            20,
+            8,
+            9,
+        )
+
+
+def test_template_starts_above_patched_test_toolchain_floors() -> None:
+    """New backends cannot inherit the vulnerable template dependency floors."""
+    template_path = REPO_ROOT / "_template/frontend/package.json"
+    template = json.loads(template_path.read_text(encoding="utf-8"))
+    dependencies = template["devDependencies"]
+
+    assert _version_tuple(dependencies["vitest"]) >= (3, 2, 6)
+    assert _version_tuple(dependencies["happy-dom"]) >= (20, 8, 9)
 
 
 def test_publish_uses_cloud_run_architecture_and_no_latest_tag() -> None:
