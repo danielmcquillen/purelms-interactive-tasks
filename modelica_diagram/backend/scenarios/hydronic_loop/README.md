@@ -22,7 +22,7 @@ The student reconstructs exactly this topology on the canvas.
   same file, so palette/ports/expected-graph can't drift from what the backend
   grades.
 - `model.fmu` — the compiled FMI 2.0 co-simulation FMU the runner executes.
-  **Built for `aarch64-linux`** (see the platform note below).
+  **Built for `linux/amd64`**, matching Cloud Run and local Docker smoke tests.
 - `model/HydronicLoop.mo` — the Modelica source. `model/{setup,build,diag}.mos`
   + `model/validate.py` — the OpenModelica build + validation scripts.
 
@@ -48,9 +48,11 @@ inside the official OpenModelica Docker image — no local OM install needed.
 From this directory:
 
 ```bash
-# 1. Pull OM (native arch: arm64 on Apple Silicon, amd64 elsewhere).
+# Always compile for Cloud Run's architecture. Docker Desktop emulates this on
+# an Apple-Silicon Mac.
 docker pull openmodelica/openmodelica:v1.26.9-ompython
-docker run -d --name om-build -v "$PWD/model:/work" -w /work \
+docker run -d --name om-build --platform linux/amd64 \
+  -v "$PWD/model:/work" -w /work \
   openmodelica/openmodelica:v1.26.9-ompython sleep infinity
 
 # 2. Install Buildings (downloads MBL 13.0.0) + build the FMU.
@@ -60,7 +62,15 @@ docker exec om-build omc /work/build.mos   # -> /work/HydronicLoop.fmu
 # 3. Validate (params settable + sane numbers), then place + hash.
 docker exec om-build bash -lc "pip install -q fmpy && python3 /work/validate.py"
 cp model/HydronicLoop.fmu model.fmu
-shasum -a 256 model.fmu     # -> manifest assets: block
+shasum -a 256 model.fmu
+# Expected for the committed FMU:
+# fd358022989b9420441637c986888026acfebf15d204790db337a0db5f4d5e79
+docker rm -f om-build
+
+# From the repository root: verify the manifest hash, embedded ELF
+# architecture, and the real container execution.
+python3 scripts/validate_release_assets.py
+just smoke modelica_diagram
 ```
 
 Three non-obvious fixes are baked into `HydronicLoop.mo` / `build.mos`:
@@ -76,27 +86,23 @@ Three non-obvious fixes are baked into `HydronicLoop.mo` / `build.mos`:
    keeps `QBoi_kW`/`TRooSet_degC` settable without breaking OM's FMU init
    Jacobian. `TRoo_degC`/`EHea_kWh` are declared `output`.
 
-**Validated** (15 °C start, 0 °C outside, 3 h): `QBoi_kW=10, TRooSet=21` →
-room **22.1 °C**, **13.3 kWh**; the parameters clearly move the result.
+**Validated 2026-07-14 under linux/amd64 emulation** (15 °C start, 0 °C
+outside, 3 h): `QBoi_kW=10, TRooSet=21` → room **22.17 °C**, **13.92 kWh**;
+the parameters clearly move the result.
 
 ## Platform note (important)
 
-`model.fmu` is committed as **`aarch64-linux`** (built on Apple Silicon), which
-matches a locally-built arm64 backend image. **Cloud Run is `amd64`** — before
-deploying there, rebuild the FMU on the amd64 image and re-hash:
-
-```bash
-docker run -d --name om-amd64 --platform linux/amd64 -v "$PWD/model:/work" \
-  -w /work openmodelica/openmodelica:v1.26.9-ompython sleep infinity
-# (same setup.mos + build.mos; produces an amd64 binary)
-```
-
-(A multi-platform FMU bundling both `binaries/aarch64-linux/` and
-`binaries/x86_64-linux/` would serve both; that's a follow-up.)
+`model.fmu` contains x86-64 Linux shared libraries. Cloud Run executes it
+natively; Docker Desktop executes the same backend image under AMD64 emulation
+on Apple Silicon. Do not rebuild it in a native arm64 OpenModelica container:
+an FMU can still use the generic `binaries/linux64/` path while embedding an
+incompatible AArch64 ELF. `scripts/validate_release_assets.py` inspects the ELF
+headers, and both `just release` and release CI run that check before a tag can
+produce artifacts.
 
 ## Deploying a change
 
 `model.fmu` + `scenario.json` are pinned by SHA in the manifest `assets:` block.
 After changing either: re-hash, update the manifest, **bump the manifest
-version**, `just build modelica_diagram`, and reinstall with `--replace-active`
+version**, run `just smoke modelica_diagram`, and reinstall with `--replace-active`
 (the installer won't mutate a registration that has historical runs).

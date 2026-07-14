@@ -1,0 +1,44 @@
+schema_version = 1
+
+# Authoritative inventory of backend container images. The justfile and release
+# workflow remain intentionally explicit; repository contract tests compare
+# both against this file so a new backend cannot be omitted from a release.
+
+[[backend]]
+slug = "echo"
+dockerfile = "echo/backend/Dockerfile"
+project_file = "echo/backend/pyproject.toml"
+test_path = "echo/backend/tests"
+metadata = "echo/backend/__metadata__.py"
+manifest = "echo/interactive_task.yaml"
+image_name = "purelms-itask-echo"
+shared_contract_floor = "0.5.0"
+platforms = ["linux/amd64"]
+native_payload = "portable-python"
+release = true
+
+[[backend]]
+slug = "energyplus_single_zone"
+dockerfile = "energyplus_single_zone/backend/Dockerfile"
+project_file = "energyplus_single_zone/backend/pyproject.toml"
+test_path = "energyplus_single_zone/backend/tests"
+metadata = "energyplus_single_zone/backend/__metadata__.py"
+manifest = "energyplus_single_zone/interactive_task.yaml"
+image_name = "purelms-itask-energyplus-single-zone"
+shared_contract_floor = "0.5.0"
+platforms = ["linux/amd64"]
+native_payload = "energyplus-x86_64"
+release = true
+
+[[backend]]
+slug = "modelica_diagram"
+dockerfile = "modelica_diagram/backend/Dockerfile"
+project_file = "modelica_diagram/backend/pyproject.toml"
+test_path = "modelica_diagram/backend/tests"
+metadata = "modelica_diagram/backend/__metadata__.py"
+manifest = "modelica_diagram/interactive_task.yaml"
+image_name = "purelms-itask-modelica-diagram"
+shared_contract_floor = "0.5.0"
+platforms = ["linux/amd64"]
+native_payload = "fmu-linux64-x86_64"
+release = true

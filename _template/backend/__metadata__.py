@@ -1,12 +1,9 @@
 """
 Per-backend runtime self-description.
 
-PureLMS reads this at backend-registration time (future work) to
-verify the
-declared ``SimulationBackendRegistration`` matches the container's
-self-report. Until that registration-time check ships, this file is
-informational only — but the convention is established so new
-backends ship with it from day one.
+This file is informational. ``interactive_task.yaml`` is the LMS source of
+truth; keep this self-description synchronized for operator inspection and
+future automated drift detection.
 """
 
 # TODO: fill in for your backend.
@@ -32,7 +29,6 @@ OUTPUT_METRICS = [
     # {"name": "annual_heating_kWh", "type": "number", "unit": "kWh"},
 ]
 
-# Whether this backend can run as an async streaming service
-# . v1 InteractiveTasks are sync-only — leave
-# this False unless you're prototyping async support.
+# Whether the domain implementation is a long-lived streaming service. This
+# does not control local Docker vs asynchronous Cloud Run Jobs transport.
 SUPPORTS_STREAMING = False

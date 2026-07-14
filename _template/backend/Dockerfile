@@ -20,6 +20,19 @@ RUN pip install --no-cache-dir --find-links /vendor .
 
 FROM python:3.13-slim
 
+ARG PURELMS_IMAGE_VERSION="dev"
+ARG PURELMS_IMAGE_REVISION="unknown"
+ARG PURELMS_IMAGE_SOURCE="https://github.com/danielmcquillen/purelms-interactive-tasks"
+ARG PURELMS_BACKEND_SLUG="replace_me"
+ARG PURELMS_TASK_VERSION="0.1.0"
+
+LABEL org.opencontainers.image.title="PureLMS InteractiveTask backend" \
+      org.opencontainers.image.version="${PURELMS_IMAGE_VERSION}" \
+      org.opencontainers.image.revision="${PURELMS_IMAGE_REVISION}" \
+      org.opencontainers.image.source="${PURELMS_IMAGE_SOURCE}" \
+      io.purelms.interactive-task.slug="${PURELMS_BACKEND_SLUG}" \
+      io.purelms.interactive-task.version="${PURELMS_TASK_VERSION}"
+
 # Non-root user for the runtime container.
 RUN useradd --create-home --uid 1000 purelms
 USER purelms

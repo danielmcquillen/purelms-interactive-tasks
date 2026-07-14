@@ -2,15 +2,9 @@
 Per-backend runtime self-description for the EnergyPlus single-zone
 InteractiveTask.
 
-Informational only in v1 — the LMS reads ``interactive_task.yaml``
-as the source of truth.
-When registration-time container introspection ships (Slice 4+),
-the LMS will read this file from
-the running container and verify it matches the persisted
-``SimulationBackendRegistration``.
-
-Keep this file in sync with ``interactive_task.yaml`` so the
-future drift-detection check passes.
+Informational only—the LMS reads ``interactive_task.yaml`` as the source of
+truth. Keep this file synchronized for operator inspection and future
+automated drift detection.
 """
 
 BACKEND_TYPE = "ENERGYPLUS_SINGLE_ZONE"
@@ -60,7 +54,6 @@ OUTPUT_METRICS = [
     {"name": "notes", "type": "string"},
 ]
 
-# Still sync-only. The single-zone annual run is fast
-# (seconds), so there's no need for progress callbacks yet; async
-# streaming stays a future capability for heavier multi-zone models.
+# The domain implementation is not a long-lived streaming service. It does
+# report phase progress through the shared runtime on Cloud Run Jobs.
 SUPPORTS_STREAMING = False

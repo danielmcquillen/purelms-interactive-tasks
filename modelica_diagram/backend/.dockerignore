@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+tests/
+
+.env
+.env.*
+.envs
+*.pem
+*.key
+*.crt
+*.p12
+*.jsonl
+
+# Reproducible Modelica authoring sources stay in git, but the runtime needs
+# only scenario.json and the pinned model.fmu beside it.
+scenarios/*/model/
+
+.DS_Store
+*.log

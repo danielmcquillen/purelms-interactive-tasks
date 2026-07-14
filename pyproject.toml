@@ -1,6 +1,6 @@
 [project]
 name = "purelms-interactive-tasks"
-version = "0.2.0"
+version = "0.2.1"
 description = "Container + frontend pairs that PureLMS launches as InteractiveTasks"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,7 +25,7 @@ authors = [
 dependencies = [
     # Pydantic envelope schemas — every backend reads + writes these.
     # Floor pinned to the version that introduced unit_block_id on
-    # SimulationInputEnvelope (Slice 3d sweep). Older
+    # SimulationInputEnvelope. Older
     # versions reject the field due to ``extra="forbid"``.
     "purelms-shared>=0.5.0",
 ]
@@ -61,18 +61,12 @@ dev = [
 [tool.pytest.ini_options]
 minversion = "8.0"
 addopts = "-ra --strict-markers"
-# Workspace-root pytest scope is intentionally narrow — just the
-# canonical reference InteractiveTask (echo). Why not multiple
-# backends here: each backend's ``tests/`` directory uses the same
-# file names (``test_main.py``, ``test_runner.py``) and pytest's
-# top-level collection doesn't scope module names per-directory
-# without conftest.py setup. The right "run everything" entrypoint
-# is ``just test-all``, which cd's into each backend separately so
-# each backend's own ``pyproject.toml`` (with ``testpaths=["tests"]``)
-# is the config root.
+# Workspace-root pytest covers repository-level contracts only. Backend test
+# modules share names and each member has its own runtime dependencies, so the
+# documented ``just test-all`` recipe enters every backend separately after
+# running this root suite.
 testpaths = [
     "tests",
-    "echo/backend/tests",
 ]
 python_files = ["test_*.py"]
 

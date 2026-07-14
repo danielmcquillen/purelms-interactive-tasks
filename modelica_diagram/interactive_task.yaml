@@ -2,15 +2,15 @@
 #
 # The learner assembles a hydronic heating loop from Modelica Buildings
 # Library components on a canvas; the backend topology-checks the diagram
-# against the scenario's expected graph, then (once the FMU is present) runs
-# the pre-compiled FMU. FMUs are platform-authored (trust_tier: platform);
+# against the scenario's expected graph, then runs the pre-compiled FMU.
+# FMUs are platform-authored (trust_tier: platform);
 # there is no author upload in the MVP.
 
 schema_version: "purelms.interactive_task.v1"
 
 slug: modelica_diagram
 name: Modelica FMU Diagram
-version: 0.2.2
+version: 0.2.3
 description: |
   Build a hydronic heating loop (boiler -> pump -> radiator -> room) from
   Modelica Buildings Library components, connect them correctly, then adjust the
@@ -100,7 +100,7 @@ assets:
   - path: backend/scenarios/hydronic_loop/scenario.json
     sha256: "86f7e3467c3713811f69f1eb398b12156905e68258d9cf16974dc11dabd392d7"
   - path: backend/scenarios/hydronic_loop/model.fmu
-    sha256: "a1687eee04e26e71d59458c7a81b0a2ea2238c8cb9873b90a7a466cc55321bb2"
+    sha256: "fd358022989b9420441637c986888026acfebf15d204790db337a0db5f4d5e79"
 
 lms_context_used:
   - run_id

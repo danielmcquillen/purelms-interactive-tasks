@@ -10,8 +10,9 @@
 # git config needed.
 #
 # To rotate or add a signer, append a line of the form:
-#   <identity> namespaces="git" <key-type> <base64-public-key> <comment>
+#   <identity> namespaces="git" <key-type> <base64-public-key> [comment]
+# Omit comments that expose a workstation hostname or local account name.
 # Print your current public signing key with:
 #   cat "$(git config --global user.signingkey)"
 
-daniel@mcquilleninteractive.com namespaces="git" ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBOsPda2rY0VkIJUuK85cVc2AgKz/z7QfYDp6dpvMYhrBSsYQYHoxG9s77wRzQ8OPSfl5zmpePWGG1kwaLW0G/xs= validibot-signing@secretive.Daniel’s-Mac-mini.local
+daniel@mcquilleninteractive.com namespaces="git" ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBOsPda2rY0VkIJUuK85cVc2AgKz/z7QfYDp6dpvMYhrBSsYQYHoxG9s77wRzQ8OPSfl5zmpePWGG1kwaLW0G/xs=

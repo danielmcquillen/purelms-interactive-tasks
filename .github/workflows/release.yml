@@ -107,6 +107,12 @@ jobs:
           fi
           echo "Tag '$TAG_REF' signature verified."
 
+      # Manifest hashes and embedded FMU binaries are part of the release
+      # contract. In particular, Cloud Run can execute linux/amd64 only; this
+      # catches an FMU rebuilt natively on an Apple-Silicon workstation.
+      - name: Validate release assets and native architectures
+        run: python3 scripts/validate_release_assets.py
+
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -128,9 +134,9 @@ jobs:
       # Don't cancel siblings on one failure — see all failure modes at once.
       fail-fast: false
       matrix:
-        # The backend directory slugs (snake_case). Keep in sync with the
-        # justfile ``slugs`` variable. ``echo`` is the demo/smoke backend;
-        # drop it here if you don't want an official echo image.
+        # The backend directory slugs (snake_case). Keep in sync with
+        # backends.toml and the justfile ``slugs`` variable; contract tests
+        # enforce the three-way match. Echo is the permanent smoke fixture.
         slug: [echo, energyplus_single_zone, modelica_diagram]
 
     permissions:
@@ -209,6 +215,11 @@ jobs:
           tags: |
             ${{ steps.image-ref.outputs.ghcr_full_ref }}
             ${{ steps.image-ref.outputs.ghcr_image }}:latest
+          build-args: |
+            PURELMS_IMAGE_VERSION=${{ steps.image-ref.outputs.tag }}
+            PURELMS_IMAGE_REVISION=${{ github.sha }}
+            PURELMS_IMAGE_SOURCE=https://github.com/${{ github.repository }}
+            PURELMS_BACKEND_SLUG=${{ matrix.slug }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
           provenance: mode=max

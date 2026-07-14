@@ -32,18 +32,22 @@ purelms-interactive-tasks/
 
 **`<domain>_<scope>` in snake_case** — e.g. `energyplus_single_zone`, `gel_electrophoresis_basic`, `python_grading_pep8`. Underscores, not hyphens. The slug is what PureLMS's `InteractiveTaskBlock.simulation_backend_slug` references.
 
-Docker images derive a hyphenated alias at the boundary only: slug `energyplus_single_zone` → image `purelms-itask-energyplus-single-zone:<version>`. The `s/_/-/g` conversion is done once, inside the LMS's `install_interactive_task` command.
+Docker images derive a hyphenated alias at tooling boundaries: slug `energyplus_single_zone` → image `purelms-itask-energyplus-single-zone:<version>`. The justfile, release workflow, and LMS installer all apply the same `s/_/-/g` rule.
 
 ## Adding an InteractiveTask
 
 1. **Copy the template.** `cp -r _template <your_slug>` is the fastest start.
 2. **Fill in `interactive_task.yaml`.** Required: `schema_version: "purelms.interactive_task.v1"`, `slug`, `name`, `version`, `description`, `backend` (image, credit_cost, trust_tier, execution_mode, default_timeout_seconds), `frontend.bundle`. Recommended: `parameters`, `outputs`, `lms_context_used`, `lms_outcomes`. See the manifest section of [`BACKEND_AUTHORING_GUIDE.md`](BACKEND_AUTHORING_GUIDE.md).
 3. **Add to the workspace.** Append `"<your_slug>/backend"` to `pyproject.toml`'s `[tool.uv.workspace.members]` array.
-4. **Implement the container** (`backend/main.py`):
-   - Read input envelope from `$PURELMS_INPUT_DIR/input.json`.
-   - Parse it as `purelms_shared.envelopes.SimulationInputEnvelope`.
+   For an officially published backend, also add a record to `backends.toml`,
+   add `<your_slug>` to the justfile's `slugs` value, and add it to
+   `.github/workflows/release.yml`'s matrix. Aggregate build, frontend, test,
+   smoke, release, and deploy recipes derive from those declarations; contract
+   tests prevent them from drifting.
+4. **Implement the container** (`backend/main.py`) using `purelms_itask_runtime` as shown in `_template/backend/main.py`:
+   - Create a `RuntimeLocation` and read the `SimulationInputEnvelope` with `read_input_envelope()`.
    - Do the domain work.
-   - Write `purelms_shared.envelopes.SimulationOutputEnvelope` to `$PURELMS_OUTPUT_DIR/output.json`.
+   - Write the `SimulationOutputEnvelope` with `write_output_envelope()`. The helper selects local directories or Cloud Run/GCS and sends the completion callback.
    - Exit 0 on success; non-zero on failure (the LMS reads the exit code and the log tail).
 5. **Implement the frontend** (`frontend/src/<slug>.ts`):
    - Export `function mount(element, config, helpers)` (named OR default export — the dispatcher accepts either).
@@ -78,8 +82,24 @@ Per-InteractiveTask test commands run from the workspace root:
 
 ```bash
 just test <slug>           # backend pytest + frontend vitest
-just test-all              # all InteractiveTasks
+just test-runtime          # shared local-directory + Cloud Run/GCS transport
+just test-all              # repository contracts, runtime, and all tasks
+just smoke <slug>          # build + execute the real linux/amd64 container
+just smoke-all             # all real backend containers (slower)
 ```
+
+The normal container target is `linux/amd64`, matching Cloud Run. Docker
+Desktop runs it under emulation on Apple-Silicon Macs. Native binaries inside
+an image—EnergyPlus and FMUs in particular—must match that target. Validibot's
+GCP and self-hosted native-backend recipes enforce the same target. A
+host-native optimization may be useful for a genuinely portable backend, but
+must not wrap an x86-only payload in an arm64 image: that creates a
+mixed-architecture image which may build successfully but fails when the
+native binary is loaded.
+
+Every backend build context also carries a `.dockerignore` that excludes tests,
+local caches, environment files, private-key formats, and other workstation
+noise. Keep it when copying the template.
 
 ## Pre-commit
 
@@ -97,7 +117,7 @@ git add -N .                              # makes untracked files visible to pre
 uv run pre-commit run --all-files
 ```
 
-**Gotcha:** pre-commit only sees TRACKED files. The `git add -N .` step is the intent-to-add trick that lists new files without staging their content — it's the documented PureLMS-house workflow. Without it, hooks silently skip new files (a documented Slice 3c.5 lesson).
+**Gotcha:** pre-commit only sees tracked files. The `git add -N .` step is the intent-to-add trick that lists new files without staging their content. Without it, hooks silently skip new files.
 
 ## Conventions
 
@@ -110,3 +130,7 @@ uv run pre-commit run --all-files
 ## License
 
 MIT. By contributing you agree your contribution is released under the MIT License.
+
+Report suspected vulnerabilities through the private channel in
+[`SECURITY.md`](SECURITY.md), not a public issue. Never include credentials,
+private data, or exploit details in a contribution.

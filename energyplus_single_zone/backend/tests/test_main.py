@@ -32,9 +32,9 @@ from purelms_shared.envelopes import SimulationOutputEnvelope
 def _envelope(parameters: dict, *, run_id=None) -> SimulationInputEnvelope:
     """Build a minimal SimulationInputEnvelope for the sync path.
 
-    The context fields are filled with placeholders because v1 sync
-    backends don't actually use them — only async backends (Slice 4+)
-    POST to ``callback_url_*`` mid-run.
+    The context fields are placeholders because this unit test uses the local
+    directory path. Cloud Run Jobs uses them for progress and completion
+    callbacks through the shared runtime.
     """
     return SimulationInputEnvelope(
         run_id=run_id or uuid4(),

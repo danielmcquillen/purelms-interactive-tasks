@@ -4,8 +4,14 @@
 # Dependency resolution mirrors echo — the justfile's _stage-shared-wheel
 # recipe stages purelms-shared (>=0.5.0, with diagram.v1) + purelms-itask-
 # runtime wheels into _vendor/; fmpy + numpy + jsonschema come from PyPI.
+#
+# The committed FMU contains linux/amd64 native code. Cloud Run uses amd64;
+# Docker Desktop emulates this same image on Apple Silicon. The normal build
+# recipe sets `--platform linux/amd64`; the uname guards make a direct native
+# arm64 build fail instead of producing an image that cannot load the FMU.
 
 FROM python:3.13-slim AS builder
+RUN test "$(uname -m)" = x86_64
 WORKDIR /build
 COPY pyproject.toml ./
 COPY __metadata__.py ./
@@ -19,9 +25,23 @@ RUN pip install --no-cache-dir --target /pkgs \
     "fmpy>=0.3,<1" "numpy>=1.26" "jsonschema>=4.0,<5"
 
 FROM python:3.13-slim AS runtime
+RUN test "$(uname -m)" = x86_64
+
+ARG PURELMS_IMAGE_VERSION="dev"
+ARG PURELMS_IMAGE_REVISION="unknown"
+ARG PURELMS_IMAGE_SOURCE="https://github.com/danielmcquillen/purelms-interactive-tasks"
+ARG PURELMS_BACKEND_SLUG="modelica_diagram"
+ARG PURELMS_TASK_VERSION="0.2.3"
+
+LABEL org.opencontainers.image.title="PureLMS Modelica Diagram InteractiveTask backend" \
+      org.opencontainers.image.version="${PURELMS_IMAGE_VERSION}" \
+      org.opencontainers.image.revision="${PURELMS_IMAGE_REVISION}" \
+      org.opencontainers.image.source="${PURELMS_IMAGE_SOURCE}" \
+      io.purelms.interactive-task.slug="${PURELMS_BACKEND_SLUG}" \
+      io.purelms.interactive-task.version="${PURELMS_TASK_VERSION}"
+
 WORKDIR /app
-# Modelica Buildings Library FMUs link libgomp (OpenMP) at runtime; install it
-# once the FMU's exact shared-lib needs are confirmed (`ldd model/*.so`).
+# Modelica Buildings Library FMUs link libgomp (OpenMP) at runtime.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/*
@@ -30,7 +50,7 @@ RUN useradd --create-home --shell /bin/bash app
 USER app
 COPY --from=builder /pkgs /pkgs
 COPY --from=builder /build /app
-# Scenario data (palette/expected-graph + the future model.fmu) ships with the
+# Scenario data (palette/expected-graph + model.fmu) ships with the
 # code so the topology check + the FMU run read the same pinned files.
 COPY scenarios/ /app/scenarios/
 ENV PYTHONPATH=/pkgs

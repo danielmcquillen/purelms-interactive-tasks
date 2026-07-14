@@ -14,16 +14,19 @@
 # per-run from object storage; we bake one representative EPW per climate
 # zone into the image since the learner only picks a zone, not a file).
 
-# This image is pinned to linux/amd64. EnergyPlus ships an x86_64 Linux
-# binary only (no arm64 Linux build), so the bundled binary dictates the
-# image arch. amd64 also matches the Cloud Run Jobs runtime. On an Apple
-# Silicon / arm64 host the image builds + runs under emulation (a
-# single-zone annual run is still only seconds).
+# Build and release recipes target linux/amd64. EnergyPlus ships an x86_64
+# Linux binary only (no arm64 Linux build), so the bundled binary dictates the
+# image architecture. amd64 also matches Cloud Run Jobs. On an Apple-Silicon
+# host Docker Desktop builds and runs it under emulation (a single-zone annual
+# run is still only seconds). The explicit uname guards below make a direct
+# native-arm64 `docker build` fail instead of creating a broken mixed-arch image.
 
 # =============================================================================
 # Stage 1: fetch EnergyPlus + the bundled EPW weather files
 # =============================================================================
-FROM --platform=linux/amd64 ubuntu:22.04 AS eplus-builder
+FROM ubuntu:22.04 AS eplus-builder
+
+RUN test "$(uname -m)" = x86_64
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates wget \
@@ -56,7 +59,22 @@ RUN mkdir -p /opt/weather \
 # =============================================================================
 # Stage 2: runtime container
 # =============================================================================
-FROM --platform=linux/amd64 python:3.13-slim
+FROM python:3.13-slim
+
+RUN test "$(uname -m)" = x86_64
+
+ARG PURELMS_IMAGE_VERSION="dev"
+ARG PURELMS_IMAGE_REVISION="unknown"
+ARG PURELMS_IMAGE_SOURCE="https://github.com/danielmcquillen/purelms-interactive-tasks"
+ARG PURELMS_BACKEND_SLUG="energyplus_single_zone"
+ARG PURELMS_TASK_VERSION="0.2.2"
+
+LABEL org.opencontainers.image.title="PureLMS EnergyPlus Single-Zone InteractiveTask backend" \
+      org.opencontainers.image.version="${PURELMS_IMAGE_VERSION}" \
+      org.opencontainers.image.revision="${PURELMS_IMAGE_REVISION}" \
+      org.opencontainers.image.source="${PURELMS_IMAGE_SOURCE}" \
+      io.purelms.interactive-task.slug="${PURELMS_BACKEND_SLUG}" \
+      io.purelms.interactive-task.version="${PURELMS_TASK_VERSION}"
 
 # EnergyPlus runtime libs: libgomp1 (OpenMP), libx11-6 + libxext6 (the
 # binary links X11 even headless). sudo is intentionally absent.

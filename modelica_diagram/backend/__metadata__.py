@@ -1,10 +1,9 @@
 """
 Per-backend runtime self-description (see ``echo`` for the convention).
 
-PureLMS reads this at backend-registration time (future work) to verify the
-declared ``SimulationBackendRegistration`` matches the container's self-report.
-Until that check ships, this file is informational — but the convention is
-established so backends ship with it from day one.
+This file is informational. ``interactive_task.yaml`` is the LMS source of
+truth; keep this self-description synchronized for operator inspection and
+future automated drift detection.
 """
 
 BACKEND_TYPE = "MODELICA_DIAGRAM"
@@ -14,14 +13,17 @@ BACKEND_DESCRIPTION = (
     "expected graph, then runs a pre-compiled Modelica Buildings Library FMU "
     "to report how the system responds."
 )
-BACKEND_VERSION = "0.1.0"
+BACKEND_VERSION = "0.2.3"
 
 # Parameter knobs the authoring UI can expose (mirrors interactive_task.yaml).
 EXPOSED_PARAMETERS = [
     "scenario",
     "diagram_json",
+    "layout_json",
     "boiler_nominal_power_kw",
-    "temperature_setpoint_c",
+    "room_setpoint_c",
+    "heat_loss_w_per_k",
+    "outdoor_temp_c",
 ]
 
 # Metrics the run produces.
@@ -29,8 +31,10 @@ OUTPUT_METRICS = [
     "topology_correct",
     "room_temp_final_c",
     "energy_used_kwh",
+    "time_to_setpoint_min",
     "series_json",
 ]
 
-# Sync-only (one run -> one envelope); no async streaming.
+# The domain implementation is not a long-lived streaming service. This does
+# not control local Docker vs asynchronous Cloud Run Jobs transport.
 SUPPORTS_STREAMING = False

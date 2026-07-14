@@ -11,10 +11,13 @@
 #     (purelms-itask-<slug-with-hyphens>:<version>)
 #   - The s/_/-/g conversion is done once, here in the justfile.
 
-# Backend slugs published as release images. Keep in sync with the
-# `matrix.slug` list in .github/workflows/release.yml. `echo` is the
-# demo/smoke backend — drop it here + in the matrix to skip publishing it.
+# Backend slugs published as release images. Keep in sync with `backends.toml`
+# and the `matrix.slug` list in .github/workflows/release.yml. Contract tests
+# enforce the three-way match. `echo` is the permanent demo/smoke backend.
 slugs := "echo energyplus_single_zone modelica_diagram"
+target_platform := "linux/amd64"
+git_sha := `git rev-parse --short HEAD 2>/dev/null || echo "unknown"`
+repo_version := `sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -1`
 
 default:
     @just --list
@@ -63,14 +66,20 @@ _stage-shared-wheel slug shared_path=env_var_or_default("PURELMS_SHARED_PATH", "
 # Image name derives from slug by s/_/-/g.
 # Usage: just build echo
 # Usage: just build energyplus_single_zone
-build slug: (_stage-shared-wheel slug)
-    docker build -t purelms-itask-$(echo "{{ slug }}" | tr '_' '-'):dev {{ slug }}/backend
+build slug: (_stage-shared-wheel slug) _validate-release-assets
+    docker build \
+        --platform {{ target_platform }} \
+        --build-arg PURELMS_IMAGE_VERSION="{{ repo_version }}" \
+        --build-arg PURELMS_IMAGE_REVISION="{{ git_sha }}" \
+        --build-arg PURELMS_BACKEND_SLUG="{{ slug }}" \
+        -t purelms-itask-$(echo "{{ slug }}" | tr '_' '-'):dev \
+        {{ slug }}/backend
 
 # Build all InteractiveTasks' container images.
 build-all:
-    just build echo
-    just build energyplus_single_zone
-    just build modelica_diagram
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for slug in {{ slugs }}; do just build "${slug}"; done
 
 # Build linux/amd64 and push an immutable release tag to Artifact Registry.
 # The signed GitHub release workflow remains the normal production publisher;
@@ -81,8 +90,8 @@ build-all:
 # Requires PURELMS_IMAGE_BASE (normally sourced from PureLMS's tracked .just
 # template), e.g. us-central1-docker.pkg.dev/<project>/purelms.
 # Usage: just publish echo              # defaults to v<project version>
-# Usage: just publish echo v0.2.0
-publish slug image_tag="": (_stage-shared-wheel slug)
+# Usage: just publish echo v0.2.1
+publish slug image_tag="": (_stage-shared-wheel slug) _validate-release-assets
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -105,8 +114,11 @@ publish slug image_tag="": (_stage-shared-wheel slug)
     IMAGE="${REGISTRY}/purelms-itask-${IMAGE_SLUG}"
     echo "Building and publishing ${IMAGE}:${TAG} (linux/amd64)..."
     docker buildx build \
-        --platform linux/amd64 \
+        --platform {{ target_platform }} \
         --push \
+        --build-arg PURELMS_IMAGE_VERSION="${TAG}" \
+        --build-arg PURELMS_IMAGE_REVISION="{{ git_sha }}" \
+        --build-arg PURELMS_BACKEND_SLUG="{{ slug }}" \
         --tag "${IMAGE}:${TAG}" \
         "{{ slug }}/backend"
     echo "✓ Published ${IMAGE}:${TAG}"
@@ -129,7 +141,7 @@ push slug image_tag="": (publish slug image_tag)
 # Registry and the Job is deployed with IMAGE@sha256:DIGEST.
 #
 # Usage: just deploy energyplus_single_zone prod          # current vX.Y.Z
-# Usage: just deploy energyplus_single_zone staging v0.2.0
+# Usage: just deploy energyplus_single_zone staging v0.2.1
 deploy slug stage image_tag="": (_check-slug slug)
     #!/usr/bin/env bash
     set -euo pipefail
@@ -271,25 +283,44 @@ frontend-build slug:
 
 # Build all InteractiveTask frontends.
 frontend-build-all:
-    just frontend-build echo
-    just frontend-build energyplus_single_zone
-    just frontend-build modelica_diagram
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for slug in {{ slugs }}; do just frontend-build "${slug}"; done
 
 # ---------------------------------------------------------------------
 # Testing
 # ---------------------------------------------------------------------
+
+[private]
+_validate-release-assets:
+    python3 scripts/validate_release_assets.py
+
+# Build and run one real backend container as Cloud Run's linux/amd64 target (emulated on Apple Silicon).
+smoke slug: (build slug)
+    python3 scripts/smoke_backend.py "{{ slug }}"
+
+# Exercise the real domain runtime in every backend container.
+smoke-all:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for slug in {{ slugs }}; do just smoke "${slug}"; done
 
 # Run tests for one InteractiveTask (Python + TypeScript).
 test slug:
     cd {{ slug }}/backend && uv run pytest
     cd {{ slug }}/frontend && npm test
 
-# Run tests across all InteractiveTasks + the workspace lint.
+# Test the shared local-directory / Cloud Run-GCS runtime contract.
+test-runtime:
+    cd _shared_backends/purelms_itask_runtime && uv run --extra dev pytest
+
+# Run workspace contracts, shared runtime, and every backend/frontend suite.
 test-all:
+    #!/usr/bin/env bash
+    set -euo pipefail
     uv run pytest
-    just test echo
-    just test energyplus_single_zone
-    just test modelica_diagram
+    just test-runtime
+    for slug in {{ slugs }}; do just test "${slug}"; done
 
 # Lint + format the whole workspace.
 lint:
@@ -446,7 +477,7 @@ setup-release-gar github_repo project_id region gar_repository:
 # One-time setup: a signing key in .allowed_signers (see that file) and
 # `git config --global gpg.format ssh` + a `user.signingkey`.
 #
-# Usage: just release 0.2.0
+# Usage: just release 0.2.1
 release VERSION:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -497,6 +528,10 @@ release VERSION:
         echo "  Bump the version in pyproject.toml, commit, and push first."
         exit 1
     fi
+
+    # Fail before creating a signed tag if an immutable manifest asset has
+    # drifted or an embedded native binary cannot execute on Cloud Run.
+    python3 scripts/validate_release_assets.py
 
     # purelms-shared freshness — informational. The backends pin a floor
     # (purelms-shared>=X) and the image resolves the latest at build time,

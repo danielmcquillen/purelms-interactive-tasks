@@ -19,7 +19,9 @@ backend:
   image: purelms-itask-TODO-your-slug-here:0.1.0
   credit_cost: 1                   # credits debited per run
   trust_tier: community            # platform | verified | community
-  execution_mode: sync             # v1 accepts only "sync"; async is Slice 4
+  # v1 accepts only "sync". Cloud Run/GCS transport already works through the
+  # shared runtime; this field does not select the deployment transport.
+  execution_mode: sync
   default_timeout_seconds: 60
 
 # REQUIRED: frontend deploy metadata

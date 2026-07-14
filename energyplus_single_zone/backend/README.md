@@ -34,9 +34,10 @@ change — the "configurable educational backend" property.
 ```bash
 # From the purelms-interactive-tasks repo root:
 just build energyplus_single_zone        # multi-stage: fetch EnergyPlus 25.2 + EPWs, assemble image
-just test-backend energyplus_single_zone # the fast unit suite (no binary needed)
+just test energyplus_single_zone         # fast Python + frontend unit suites
+just smoke energyplus_single_zone        # real binary + EPW in linux/amd64 Docker
 
-# Install into a PureLMS deployment (bumps the active registration to 0.2.0):
+# From a PureLMS checkout, install or replace the active registration:
 uv run python manage.py install_interactive_task \
     ../purelms-interactive-tasks/energyplus_single_zone --replace-active
 ```
@@ -48,9 +49,7 @@ rather than silently degrading to the analytical model).
 
 ## Verification status (read before trusting outputs)
 
-This backend was authored without an EnergyPlus binary or weather files
-available in the authoring environment, so the pieces split into
-**unit-verified** and **needs-a-real-build**:
+Verification is split into fast unit coverage and a real container smoke test:
 
 **✅ Unit-tested (`tests/test_runner.py`, no binary required):**
 
@@ -63,7 +62,7 @@ available in the authoring environment, so the pieces split into
 - `parse_err_file` severity tagging + multi-line continuation.
 - `_select_mode` dispatch + the analytical model's physics.
 
-**✅ Build-validated end-to-end (2026-05-29, EnergyPlus 25.2):** built the
+**✅ Build-validated end-to-end (revalidated 2026-07-14, EnergyPlus 25.2):** built the
 image and ran the container against a real envelope (`just build` +
 `docker run` with input/output mounts). The IDF runs clean (no
 Severe/Fatal), the EPW URLs resolve, the image assembles, and the End
@@ -74,20 +73,20 @@ heating ~15%, growing the window to 20 m² raises heating ~55% and cooling
 surfaced and fixed:
 
 1. **Image must be `linux/amd64`** — the NREL EnergyPlus binary is x86_64
-   only, so the Dockerfile pins both stages to `--platform=linux/amd64`
-   (also matches Cloud Run). On Apple Silicon it builds + runs under
-   emulation (~4 s/run).
+   only, and that target also matches Cloud Run. The justfile and release
+   workflow set the platform; Dockerfile guards reject accidental native-arm64
+   builds. On Apple Silicon it builds + runs under emulation (~4 s/run).
 2. **`OutputControl:Table:Style` unit conversion** — the report stores
    energy in the unit named by that field; it's set to `None`
    (report-native GJ) so `_sum_end_use_row`'s `Units = 'GJ'` filter +
    GJ→kWh conversion match. (`JtoKWH` would store kWh and silently
    return 0.)
 
-The fast unit suite (above) still covers everything binary-free, so the
-analytical fallback keeps local dev / CI working without the ~500 MB
-dependency. To re-validate after an IDF or version change: `just build
-energyplus_single_zone`, run the container against a hand-written
-`input.json`, and inspect `output.json` + `eplusout.err`.
+The fast unit suite covers everything binary-free, so the analytical fallback
+keeps lightweight development and CI working without the ~500 MB dependency.
+After an IDF, weather, dependency, or EnergyPlus-version change, run
+`just smoke energyplus_single_zone`; it creates a real envelope and rejects a
+container that does not produce simulation outputs.
 
 ---
 

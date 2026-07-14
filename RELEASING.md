@@ -26,6 +26,12 @@ For each backend slug (`echo`, `energyplus_single_zone`,
    it will admit the backend at `install_interactive_task` time.
 3. **An SPDX SBOM**, both embedded in the image manifest and attached to
    the GitHub Release page.
+4. **Validated immutable assets.** CI verifies every manifest asset hash and
+   rejects FMUs whose embedded Linux binaries are not x86-64 before creating
+   the GitHub Release.
+5. **Operator-readable OCI identity.** Every image records its repository
+   release version, source revision, source repository, backend slug, and
+   manifest task version. The digest remains the cryptographic identity.
 
 The two provenance layers stack: the signed tag gates the CI run that
 produces the attestation, so a verified attestation implies a verified
@@ -58,12 +64,19 @@ the GAR mirror is configured, the same digest also lands at:
 - Add the **public** half of that key to [`.allowed_signers`](.allowed_signers)
   (one line, `identity ssh-ed25519 AAAA...`). CI refuses any tag not signed
   by a key listed there.
+- Omit public-key comments that expose a workstation hostname or local account
+  name. The principal, namespace restriction, key type, and public key are
+  sufficient.
 
 ### 2. GHCR (required, zero config)
 
 Publishing to GitHub Container Registry uses the workflow's ambient
 `GITHUB_TOKEN`. Just make sure GitHub Actions is enabled on the repo. The image
 source label links each package to this repository.
+
+GitHub artifact attestations for this user-owned repository require the
+repository and its packages to be public. The signed bundles are stored with
+the OCI images and verified with `--bundle-from-oci`.
 
 After the **first** release creates the three packages, confirm each is public:
 
@@ -110,21 +123,27 @@ cleanly.
 
 ## Cutting a release
 
-1. Bump `version` in `pyproject.toml`, commit, and push to `main`.
-2. Run:
+1. Run `just test-all` and `just smoke-all`. The latter executes the real
+   EnergyPlus binary and Modelica FMU as `linux/amd64`, including under Docker
+   emulation on Apple Silicon.
+   It also verifies the loaded image architecture and required OCI labels.
+2. Bump `version` in `pyproject.toml`, refresh `uv.lock`, commit, and push to
+   `main`.
+3. Run:
    ```bash
-   just release 0.2.0
+   just release 0.2.1
    ```
    It checks the tree is clean, on `main`, in sync with origin, and that
-   the version matches `pyproject.toml`; then it signs and pushes the
-   `v0.2.0` tag. CI takes it from there.
-3. Watch it: `gh run watch`.
+   the version matches `pyproject.toml`. It also validates immutable asset
+   hashes and native architectures, then signs and pushes `v0.2.1`. CI repeats
+   the asset check before creating the release.
+4. Watch it: `gh run watch`.
 
 ## Verifying a release before you deploy
 
 ```bash
 # Resolve the digest (install crane if needed).
-DIGEST=$(crane digest ghcr.io/<your-org>/purelms-itask-energyplus-single-zone:v0.2.0)
+DIGEST=$(crane digest ghcr.io/<your-org>/purelms-itask-energyplus-single-zone:v0.2.1)
 
 # Verify the sigstore attestation against the digest — confirms the image
 # was built by THIS repo's GitHub Actions, signed via OIDC.

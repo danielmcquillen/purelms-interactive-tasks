@@ -34,6 +34,12 @@ The mode is read from the environment's *shape* (which env vars are set;
 whether the callback URL is `http(s)` vs the `file:///dev/null`
 sentinel) — a backend never branches on "am I local or cloud".
 
+On Cloud Run, the worker also supplies `PURELMS_INPUT_SHA256`,
+`PURELMS_INPUT_SIZE_BYTES`, and `PURELMS_INPUT_GENERATION`. The runtime reads
+the exact GCS generation with a size limit, then verifies its digest and byte
+count before parsing. Local runs may omit all three. A partial or inconsistent
+identity is a configuration error, not a best-effort fallback.
+
 ## Extras
 
 `google-cloud-storage` + `google-auth` are needed ONLY on the async /
@@ -46,6 +52,8 @@ runs without them. The deployed image installs
 
 Per the backend contract, "shared utilities (callback client, envelope
 loader, GCS helpers)" belong here once a second backend wants them —
-`echo` and `energyplus_single_zone` are both wired to it. It is a uv
+`echo`, `energyplus_single_zone`, and `modelica_diagram` are wired to it. It is a uv
 workspace member; container builds vendor its wheel into
-`<slug>/backend/_vendor/` alongside the `purelms-shared` wheel.
+`<slug>/backend/_vendor/`. Local builds also stage the sibling
+`purelms-shared` wheel; release CI stages this runtime wheel and resolves the
+published `purelms-shared` package from PyPI.

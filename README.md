@@ -23,12 +23,13 @@ purelms-interactive-tasks/
 ├── README.md                  (this file)
 ├── LICENSE                    (MIT)
 ├── CONTRIBUTING.md
+├── SECURITY.md                (private vulnerability reporting + release hygiene)
+├── backends.toml              (authoritative released-backend inventory)
 ├── pyproject.toml             (uv workspace; each task's backend/ is a member)
 ├── justfile                   (recipes: build, test, publish, deploy per task)
+├── scripts/                   (release-asset validation + real container smoke tests)
 ├── _template/                 (skeleton for new InteractiveTasks)
-├── _shared_backends/          (escape hatch — empty until needed; documents
-│                               the "one container, many configured tasks"
-│                               pattern for the day it arises)
+├── _shared_backends/          (shared runtime for local-dir and Cloud Run/GCS I/O)
 ├── echo/                      (stub test task — permanent test fixture)
 │   ├── backend/
 │   │   ├── Dockerfile
@@ -39,18 +40,18 @@ purelms-interactive-tasks/
 │   │   ├── package.json
 │   │   └── src/echo.ts
 │   └── interactive_task.yaml
-├── energyplus_single_zone/    (first real InteractiveTask — Slice 3d work)
+├── energyplus_single_zone/    (reference native-binary InteractiveTask)
 │   ├── backend/
 │   ├── frontend/
 │   └── interactive_task.yaml
 └── ...
 ```
 
-**Slug naming convention**: snake_case at the directory level and inside `interactive_task.yaml`'s `slug:` field (`energyplus_single_zone`, not `energyplus-single-zone`). The Docker image name derives a hyphenated alias at the boundary (`purelms-itask-energyplus-single-zone:<version>`); the `s/_/-/g` conversion is done once, inside the LMS's `install_interactive_task` command.
+**Slug naming convention**: snake_case at the directory level and inside `interactive_task.yaml`'s `slug:` field (`energyplus_single_zone`, not `energyplus-single-zone`). The Docker image name derives a hyphenated alias at tooling boundaries (`purelms-itask-energyplus-single-zone:<version>`). The justfile, release workflow, and LMS installer all apply the same `s/_/-/g` rule.
 
 ## The contracts (three edges)
 
-1. **Container ↔ LMS** (file-based): the container reads `$PURELMS_INPUT_DIR/input.json` (a `SimulationInputEnvelope`) and writes `$PURELMS_OUTPUT_DIR/output.json` (a `SimulationOutputEnvelope`). Both schemas live in [`purelms-shared`](https://github.com/danielmcquillen/purelms-shared). For sync execution (local Docker), the LMS reads `output.json` after the container exits. For async execution (Cloud Run Jobs, Slice 4), the container additionally POSTs progress + completion callbacks; see [`purelms_shared.callbacks`](https://github.com/danielmcquillen/purelms-shared) for the bodies.
+1. **Container ↔ LMS**: every backend uses `purelms_itask_runtime`. Local Docker reads `$PURELMS_INPUT_DIR/input.json` and writes `$PURELMS_OUTPUT_DIR/output.json`; Cloud Run Jobs reads and writes immutable `gs://` objects through `$PURELMS_INPUT_URI` and `$PURELMS_OUTPUT_URI`, then posts progress and completion callbacks. Both envelope schemas live in [`purelms-shared`](https://github.com/danielmcquillen/purelms-shared), and the backend's domain code is identical in both modes.
 
 2. **Frontend ↔ LMS** (in-browser): the frontend bundle exports `mount(element, config, helpers)`. The LMS's dispatcher (in `purelms/static/src/ts/sims/`) dynamic-imports the bundle at runtime and calls `mount(...)`. The `helpers` arg gives the bundle typed access to `api.submit`, `api.pollStatus` (an async iterator that yields run-status snapshots until terminal — terminal snapshots carry the outputs), `escape` for HTML-safe text, and a `meta` object with the bundle filename + placement id.
 
@@ -63,10 +64,14 @@ The [`BACKEND_AUTHORING_GUIDE.md`](BACKEND_AUTHORING_GUIDE.md) is the in-repo re
 1. `cp -r _template <your_slug>` (or `mkdir <your_slug>/{backend,frontend}` from scratch).
 2. Fill in `<your_slug>/interactive_task.yaml` (identity, backend image URI, frontend bundle filename, parameters, outputs, lms_outcomes rules).
 3. Add `<your_slug>/backend` to `pyproject.toml`'s `[tool.uv.workspace.members]`.
-4. Implement `backend/main.py` + `backend/Dockerfile`. Read the envelope, do the work, write the output envelope.
-5. Implement `frontend/src/<slug>.ts` exporting `mount(...)`. Build to `frontend/dist/<slug>.js`.
-6. Add tests under `backend/tests/` and `frontend/tests/`.
-7. Install into a PureLMS instance:
+4. For an officially published backend, add a record to `backends.toml`, add
+   the slug to `slugs` in the justfile, and add it to the matching
+   release-workflow matrix. Contract tests keep all three surfaces aligned.
+5. Implement `backend/main.py` + `backend/Dockerfile` using the runtime helper in `_template/backend/main.py`. It handles both local-directory and Cloud Run/GCS envelope I/O.
+6. Implement `frontend/src/<slug>.ts` exporting `mount(...)`. Build to `frontend/dist/<slug>.js`.
+7. Add tests under `backend/tests/` and `frontend/tests/`.
+8. Run `just test <your_slug>` and `just smoke <your_slug>`. The smoke recipe builds and executes the same `linux/amd64` target used by Cloud Run; Docker Desktop emulates it on Apple Silicon.
+9. Install into a PureLMS instance:
    ```bash
    cd path/to/purelms
    uv run python manage.py install_interactive_task ../purelms-interactive-tasks/<your_slug>
@@ -74,11 +79,29 @@ The [`BACKEND_AUTHORING_GUIDE.md`](BACKEND_AUTHORING_GUIDE.md) is the in-repo re
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full checklist, and [`BACKEND_AUTHORING_GUIDE.md`](BACKEND_AUTHORING_GUIDE.md) for the deep author-facing reference (every manifest field, every helper, every gotcha — the document to keep open while you build).
 
+## Container architecture policy
+
+The production and supported local target is `linux/amd64`. GitHub Actions,
+the local build/publish recipes, the smoke runner, and Cloud Run Jobs all use
+that target. On an Apple-Silicon Mac, Docker Desktop runs the image under
+emulation. This is an intentional production-parity choice: EnergyPlus ships
+an x86-64 Linux executable and the committed Modelica FMU contains x86-64
+Linux code, so a native-arm64 wrapper image would be a broken mixed-architecture
+container.
+
+This follows the proven Validibot path for native-payload backends: its GCP and
+self-hosted recipes explicitly build `linux/amd64`. Validibot also has a newer
+host-native developer default intended to speed up portable backends such as
+SHACL; that optimization is not safe for an image containing an x86-only
+EnergyPlus executable or FMU. Slow local emulation is acceptable here because
+it executes the same native bytes that Cloud Run executes. `just smoke-all`
+proves that contract across every backend.
+
 ## Publish and deploy
 
 The repository version is the release-image version for all backends. The
-normal production path is a signed release: `just release 0.2.0` pushes tag
-`v0.2.0`, and GitHub Actions builds linux/amd64 images, publishes them to GHCR,
+normal production path is a signed release: `just release X.Y.Z` pushes tag
+`vX.Y.Z`, and GitHub Actions builds linux/amd64 images, publishes them to GHCR,
 and mirrors them to PureLMS's Artifact Registry when the documented repository
 variables are configured.
 
@@ -96,6 +119,11 @@ at `latest`. Prod uses `purelms-itask-<slug>`, while dev and staging append the
 stage name. Each stage gets a dedicated `purelms-sim-<stage>` runtime service
 account with simulation-bucket and worker-callback access only.
 
+Built images carry OCI labels for the repository release version, source
+revision, source repository, backend slug, and InteractiveTask manifest
+version. These labels support operator inventory; the immutable image digest
+remains the deployment and provenance trust root.
+
 The recipe prints the exact `TASK_OIDC_ALLOWED_SERVICE_ACCOUNTS` line required
 by Django. Apply that line to the stage's user-owned `.django` file and run
 `just gcp deploy-config <stage>` before the first live simulation. The tracked
@@ -104,6 +132,12 @@ example in PureLMS's `.envs.example/` directory documents the same setting.
 For a deliberate local publish (development or recovery), `just publish
 <slug>` builds linux/amd64 and pushes only the immutable `vX.Y.Z` tag. It does
 not replace the signed release workflow for normal production releases.
+
+## Security
+
+Report vulnerabilities privately and never put secrets or learner data in a
+public issue. See [SECURITY.md](SECURITY.md) for the disclosure and release
+hygiene policy.
 
 ## License
 

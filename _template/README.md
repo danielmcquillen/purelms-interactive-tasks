@@ -26,8 +26,14 @@ Then:
    - `--outfile` to `dist/<your_slug>.js`
 7. Add `"my_new_task/backend"` to the workspace root
    `pyproject.toml`'s `[tool.uv.workspace.members]`.
-8. Build + test: `just build my_new_task && just test my_new_task`.
-9. Install into a PureLMS instance:
+8. If this is an officially published backend, add it to `backends.toml`, add
+   `my_new_task` to the root justfile's `slugs` value, and add it to the release
+   workflow matrix. Update the Dockerfile's backend-slug and task-version label
+   defaults too.
+9. Build + test: `just test my_new_task && just smoke my_new_task`. The smoke
+   recipe builds and runs `linux/amd64`, matching Cloud Run and running under
+   Docker Desktop emulation on Apple Silicon.
+10. Install into a PureLMS instance:
    `manage.py install_interactive_task ../purelms-interactive-tasks/my_new_task`.
 
 See [`../CONTRIBUTING.md`](../CONTRIBUTING.md) and

@@ -8,7 +8,7 @@ parameter-marshalling utility).
 
 - **`purelms_itask_runtime/`** — the shared backend runtime contract:
   local-dir vs GCS-URI envelope I/O + the progress/complete worker
-  callbacks. Both `echo` and `energyplus_single_zone` depend on it (the
+  callbacks. `echo`, `energyplus_single_zone`, and `modelica_diagram` depend on it (the
   "second user" trigger below), so each backend's `main.py` is identical
   regardless of whether the LMS launched it via the local DockerCompose
   path or the async Cloud Run Jobs path. See its README for the contract.
@@ -28,10 +28,14 @@ This avoids the "premature shared library" failure mode where the
 abstraction is wrong because it was designed before its second user
 existed.
 
-## Layout (once populated)
+## Layout
 
 ```
 _shared_backends/
+  purelms_itask_runtime/    # current local-dir / GCS runtime contract
+    pyproject.toml
+    src/
+    tests/
   energyplus_io/             # for example
     pyproject.toml           # name = "purelms-shared-energyplus-io"
     src/

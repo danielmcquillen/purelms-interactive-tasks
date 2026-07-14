@@ -4,8 +4,8 @@
  * Light unit coverage: mount() inserts a form, submit calls
  * helpers.api.submit with the input value, polling cycles render
  * progress and terminal status. We don't try to test the
- * dispatcher → bundle integration here — that belongs to the LMS-
- * side Slice 3c integration test.
+ * dispatcher → bundle integration here — that belongs to the LMS-side
+ * integration test.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
