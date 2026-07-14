@@ -71,6 +71,7 @@ addopts = "-ra --strict-markers"
 # each backend's own ``pyproject.toml`` (with ``testpaths=["tests"]``)
 # is the config root.
 testpaths = [
+    "tests",
     "echo/backend/tests",
 ]
 python_files = ["test_*.py"]

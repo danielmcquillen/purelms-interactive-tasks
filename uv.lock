@@ -1214,7 +1214,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "purelms-itask-runtime", editable = "_shared_backends/purelms_itask_runtime" },
-    { name = "purelms-shared", specifier = ">=0.4.0" },
+    { name = "purelms-shared", specifier = ">=0.5.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0,<10" },
 ]
 provides-extras = ["dev"]
@@ -1236,7 +1236,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "purelms-itask-runtime", editable = "_shared_backends/purelms_itask_runtime" },
-    { name = "purelms-shared", specifier = ">=0.4.0" },
+    { name = "purelms-shared", specifier = ">=0.5.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0,<10" },
 ]
 provides-extras = ["dev"]
@@ -1266,7 +1266,7 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.0,<5" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "purelms-itask-runtime", editable = "_shared_backends/purelms_itask_runtime" },
-    { name = "purelms-shared", editable = "../purelms-shared" },
+    { name = "purelms-shared", specifier = ">=0.5.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0,<10" },
 ]
 provides-extras = ["dev"]
@@ -1300,20 +1300,14 @@ provides-extras = ["cloud", "dev"]
 [[package]]
 name = "purelms-shared"
 version = "0.5.0"
-source = { editable = "../purelms-shared" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.0,<5" },
-    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0,<5" },
-    { name = "pydantic", specifier = ">=2.6,<3" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0,<10" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15,<1" },
+sdist = { url = "https://files.pythonhosted.org/packages/b0/20/8d6e1e1f3a710793afc1e3d3a8ca3646a94f1d528df094ba96679e9bab6c/purelms_shared-0.5.0.tar.gz", hash = "sha256:056c4bdf43312d32333426ddb37aa7f7b231614f95b425a1021de603136dcb5f", size = 34085, upload-time = "2026-07-14T00:36:03.951Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4f/f3/6f51ec61accce98023ec00e8684a37c1462b85149f18a0e05e24de673004/purelms_shared-0.5.0-py3-none-any.whl", hash = "sha256:ad53964ae0fa81a05a4340a9c94156452c622f6a7319f1de20a14c8fbe619711", size = 28077, upload-time = "2026-07-14T00:36:02.641Z" },
 ]
-provides-extras = ["dev"]
 
 [[package]]
 name = "pyasn1"

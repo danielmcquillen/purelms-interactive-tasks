@@ -62,22 +62,48 @@ the GAR mirror is configured, the same digest also lands at:
 ### 2. GHCR (required, zero config)
 
 Publishing to GitHub Container Registry uses the workflow's ambient
-`GITHUB_TOKEN`. Just make sure GitHub Actions is enabled on the repo.
+`GITHUB_TOKEN`. Just make sure GitHub Actions is enabled on the repo. The image
+source label links each package to this repository.
+
+After the **first** release creates the three packages, confirm each is public:
+
+1. Open your GitHub profile → **Packages**.
+2. Open each `purelms-itask-*` package → **Package settings**.
+3. Under **Danger Zone**, choose **Change visibility → Public**.
+
+GHCR packages created under a personal account default to private. Public
+visibility is required because the deployed LMS verifies the public GHCR twin
+without a Docker credential helper. This is a one-time action per package; test
+it by resolving a digest while logged out of GHCR.
 
 ### 3. PureLMS GAR mirror (optional)
 
 Only if you want the images in PureLMS's private Artifact Registry for
-Cloud Run Jobs. In **this repo's** Settings → Secrets and variables →
-Actions, set — **all pointing at PureLMS's own GCP project, never
-validibot's:**
+Cloud Run Jobs. The keyless setup recipe creates a repository-scoped Workload
+Identity provider, a least-privilege publisher service account, and all five
+GitHub Actions variables—no service-account key or GitHub secret is created:
+
+```bash
+just setup-release-gar \
+  <github-owner>/purelms-interactive-tasks \
+  <purelms-gcp-project-id> \
+  <gcp-region> \
+  <gar-repository>
+```
+
+The recipe uses GitHub's stable numeric repository and owner IDs in the WIF
+condition, grants `roles/iam.workloadIdentityUser` only to that repository,
+and grants `roles/artifactregistry.writer` only on the named GAR repository.
+It sets these non-secret variables in **this repository**, all pointing at
+PureLMS's own GCP project, never validibot's:
 
 | Kind | Name | Value |
 |---|---|---|
 | Variable | `GCP_PROJECT_ID` | PureLMS's GCP project id |
 | Variable | `GCP_REGION` | e.g. `us-central1` |
 | Variable | `GCP_GAR_REPOSITORY` | PureLMS's Artifact Registry repo name |
-| Secret | `GCP_WORKLOAD_IDENTITY_PROVIDER` | PureLMS's WIF provider resource |
-| Secret | `GCP_SERVICE_ACCOUNT_EMAIL` | PureLMS's push service account |
+| Variable | `GCP_WORKLOAD_IDENTITY_PROVIDER` | PureLMS's repository-scoped WIF provider resource |
+| Variable | `GCP_SERVICE_ACCOUNT_EMAIL` | PureLMS's least-privilege image publisher |
 
 Leave them unset and the release is GHCR-only — the GAR step is skipped
 cleanly.
@@ -104,9 +130,21 @@ DIGEST=$(crane digest ghcr.io/<your-org>/purelms-itask-energyplus-single-zone:v0
 # was built by THIS repo's GitHub Actions, signed via OIDC.
 gh attestation verify \
   "oci://ghcr.io/<your-org>/purelms-itask-energyplus-single-zone@$DIGEST" \
-  --owner <your-org>
+  --bundle-from-oci \
+  --repo <your-org>/purelms-interactive-tasks \
+  --signer-workflow \
+    <your-org>/purelms-interactive-tasks/.github/workflows/release.yml \
+  --deny-self-hosted-runners
 # Expected: "Verification succeeded!"
 ```
+
+Cloud Run executes the private GAR mirror, but the LMS verifies this public
+GHCR twin at the **same digest**. Because this is a personal repository, the
+workflow stores the signed bundle with the GHCR image and verification uses
+`--bundle-from-oci`. Resolving the public twin means the deployed management
+job needs only `GH_TOKEN`, not a GAR Docker credential helper. The verified
+bytes are identical because the release workflow mirrors the manifest without
+rebuilding it.
 
 This is the same check the PureLMS LMS runs server-side (via
 `verify_image_signature`) when `SIMULATION_IMAGE_POLICY=signed_digest` and

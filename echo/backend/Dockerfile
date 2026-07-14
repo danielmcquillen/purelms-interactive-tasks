@@ -6,14 +6,12 @@
 #
 # Dependency resolution for ``purelms-shared``:
 #
-# - **Dev (today):** the ``just build`` recipe stages a local wheel
+# - **Development:** the ``just build`` recipe stages a local wheel
 #   of ``purelms-shared`` into ``_vendor/`` (sibling-repo path); we
 #   install from that wheel.
-# - **Production (Phase 5+):** ``purelms-shared`` will be published
-#   to PyPI; the ``_vendor/`` directory will be empty / absent and
-#   the install line will switch to ``pip install
-#   purelms-shared>=0.2.0``. Until then, the local wheel is the
-#   only way to reach a working image.
+# - **Release CI:** stages only ``purelms-itask-runtime``; pip resolves
+#   its ``purelms-shared>=0.5.0`` dependency from PyPI. This keeps clean
+#   checkouts independent of a sibling repository.
 
 FROM python:3.13-slim AS builder
 WORKDIR /build

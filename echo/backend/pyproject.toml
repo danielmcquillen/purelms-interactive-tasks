@@ -8,7 +8,7 @@ authors = [
     { name = "Daniel McQuillen", email = "daniel@mcquilleninteractive.com" },
 ]
 dependencies = [
-    "purelms-shared>=0.4.0",
+    "purelms-shared>=0.5.0",
     # Shared backend runtime: local-dir vs GCS envelope I/O + the
     # progress/complete worker callbacks. Workspace member (not on
     # PyPI), resolved via [tool.uv.sources] below; the image installs
@@ -21,7 +21,7 @@ dev = [
     "pytest>=8.0,<10",
 ]
 
-# purelms-shared is a published PyPI package (>=0.4.0 above) — no
+# purelms-shared is a published PyPI package (>=0.5.0 above) — no
 # source override needed (audit P0-2 closed). purelms-itask-runtime is
 # an in-repo workspace member, so it resolves from the workspace.
 [tool.uv.sources]

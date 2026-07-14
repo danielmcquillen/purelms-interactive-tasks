@@ -24,7 +24,7 @@ purelms-interactive-tasks/
 ├── LICENSE                    (MIT)
 ├── CONTRIBUTING.md
 ├── pyproject.toml             (uv workspace; each task's backend/ is a member)
-├── justfile                   (recipes: build, test, push per task)
+├── justfile                   (recipes: build, test, publish, deploy per task)
 ├── _template/                 (skeleton for new InteractiveTasks)
 ├── _shared_backends/          (escape hatch — empty until needed; documents
 │                               the "one container, many configured tasks"
@@ -73,6 +73,37 @@ The [`BACKEND_AUTHORING_GUIDE.md`](BACKEND_AUTHORING_GUIDE.md) is the in-repo re
    ```
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full checklist, and [`BACKEND_AUTHORING_GUIDE.md`](BACKEND_AUTHORING_GUIDE.md) for the deep author-facing reference (every manifest field, every helper, every gotcha — the document to keep open while you build).
+
+## Publish and deploy
+
+The repository version is the release-image version for all backends. The
+normal production path is a signed release: `just release 0.2.0` pushes tag
+`v0.2.0`, and GitHub Actions builds linux/amd64 images, publishes them to GHCR,
+and mirrors them to PureLMS's Artifact Registry when the documented repository
+variables are configured.
+
+Cloud Run deployment is separate from publishing:
+
+```bash
+# Run from purelms/ after sourcing its GCP operator configuration.
+just backends deploy energyplus_single_zone prod
+just backends deploy-all prod
+```
+
+`deploy` resolves the default `v<pyproject version>` tag to its Artifact
+Registry digest and deploys `IMAGE@sha256:...`; the Cloud Run Job never points
+at `latest`. Prod uses `purelms-itask-<slug>`, while dev and staging append the
+stage name. Each stage gets a dedicated `purelms-sim-<stage>` runtime service
+account with simulation-bucket and worker-callback access only.
+
+The recipe prints the exact `TASK_OIDC_ALLOWED_SERVICE_ACCOUNTS` line required
+by Django. Apply that line to the stage's user-owned `.django` file and run
+`just gcp deploy-config <stage>` before the first live simulation. The tracked
+example in PureLMS's `.envs.example/` directory documents the same setting.
+
+For a deliberate local publish (development or recovery), `just publish
+<slug>` builds linux/amd64 and pushes only the immutable `vX.Y.Z` tag. It does
+not replace the signed release workflow for normal production releases.
 
 ## License
 

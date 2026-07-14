@@ -11,7 +11,7 @@ authors = [
     { name = "TODO Your Name", email = "TODO@example.com" },
 ]
 dependencies = [
-    "purelms-shared>=0.4.0",
+    "purelms-shared>=0.5.0",
     # Shared backend runtime: local-dir vs GCS envelope I/O + the
     # progress/complete worker callbacks. Required to satisfy the
     # Cloud Run / GCS contract — see main.py. Workspace member (not on
@@ -25,7 +25,7 @@ dev = [
     "pytest>=8.0,<10",
 ]
 
-# purelms-shared is a published PyPI package — the ``>=0.4.0`` floor
+# purelms-shared is a published PyPI package — the ``>=0.5.0`` floor
 # pin in ``dependencies`` above is all a new backend needs. (No
 # source override; that was the pre-PyPI editable-path workaround.)
 # purelms-itask-runtime is an in-repo workspace member.

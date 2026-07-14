@@ -12,7 +12,7 @@ dependencies = [
     # EnergyPlus binary (vendored in the Dockerfile) and parses
     # eplusout.sql with the stdlib ``sqlite3``. IDF generation is a
     # ``string.Template`` substitution.
-    "purelms-shared>=0.4.0",
+    "purelms-shared>=0.5.0",
     # Shared backend runtime: local-dir vs GCS envelope I/O + the
     # progress/complete worker callbacks. Workspace member (not on
     # PyPI), resolved via [tool.uv.sources] below; the image installs
@@ -25,7 +25,7 @@ dev = [
     "pytest>=8.0,<10",
 ]
 
-# purelms-shared is published to PyPI; the ``>=0.4.0`` floor-pin in
+# purelms-shared is published to PyPI; the ``>=0.5.0`` floor-pin in
 # ``dependencies`` above is the source of truth (audit P0-2 closed —
 # the editable sibling-path override is gone). purelms-itask-runtime is
 # an in-repo workspace member, so it resolves from the workspace.

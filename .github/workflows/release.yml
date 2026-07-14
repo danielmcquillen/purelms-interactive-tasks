@@ -44,7 +44,6 @@
 #     GCP_PROJECT_ID          # PureLMS's GCP project (NOT validibot's)
 #     GCP_REGION              # e.g. us-central1
 #     GCP_GAR_REPOSITORY      # PureLMS's Artifact Registry repo name
-#   Secrets:
 #     GCP_WORKLOAD_IDENTITY_PROVIDER   # PureLMS's WIF provider resource
 #     GCP_SERVICE_ACCOUNT_EMAIL        # PureLMS's push service account
 #
@@ -210,6 +209,8 @@ jobs:
           tags: |
             ${{ steps.image-ref.outputs.ghcr_full_ref }}
             ${{ steps.image-ref.outputs.ghcr_image }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
           provenance: mode=max
           sbom: true
 
@@ -219,6 +220,10 @@ jobs:
           subject-name: ${{ steps.image-ref.outputs.ghcr_image }}
           subject-digest: ${{ steps.build-push-ghcr.outputs.digest }}
           push-to-registry: true
+          # GitHub storage records are organization-only; this repository is
+          # currently user-owned. The signed attestation is stored with the
+          # GHCR image and consumers verify it with --bundle-from-oci.
+          create-storage-record: false
 
       # ── Optional secondary registry: PureLMS's GAR ────────────────────
       # Gated on THIS repo's GCP_PROJECT_ID variable. The same digest (same
@@ -228,8 +233,9 @@ jobs:
         id: gcp-auth
         uses: google-github-actions/auth@b7593ed2efd1c1617e1b0254da33b86225adb2a5  # v3.0.0
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
 
       - name: Configure Docker for Artifact Registry
         if: vars.GCP_PROJECT_ID != ''

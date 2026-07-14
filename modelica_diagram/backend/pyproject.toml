@@ -27,10 +27,6 @@ dev = [
 
 [tool.uv.sources]
 purelms-itask-runtime = { workspace = true }
-# purelms-shared isn't on PyPI with purelms.diagram.v1 yet (added in 0.5.0);
-# resolve from the local checkout for dev/test. The container build vendors the
-# wheel via the justfile's _stage-shared-wheel recipe instead (see Dockerfile).
-purelms-shared = { path = "../../../purelms-shared", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
