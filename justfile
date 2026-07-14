@@ -146,6 +146,30 @@ deploy slug stage image_tag="": (_check-slug slug)
     #!/usr/bin/env bash
     set -euo pipefail
 
+    # Service-account creation is eventually consistent across Google Cloud
+    # services. IAM can see a new account before Storage or Cloud Run can.
+    # Retry cross-service operations with capped exponential backoff.
+    retry_gcloud() {
+        local attempt=1
+        local max_attempts=7
+        local delay=2
+        while true; do
+            if "$@"; then
+                return 0
+            fi
+            if [ "${attempt}" -ge "${max_attempts}" ]; then
+                echo "✗ gcloud command still failed after ${max_attempts} attempts."
+                return 1
+            fi
+            echo "  Google Cloud IAM has not converged; retrying in ${delay}s " \
+                 "(attempt $((attempt + 1))/${max_attempts})..."
+            sleep "${delay}"
+            attempt=$((attempt + 1))
+            delay=$((delay * 2))
+            if [ "${delay}" -gt 30 ]; then delay=30; fi
+        done
+    }
+
     if [[ ! "{{ stage }}" =~ ^(dev|staging|prod)$ ]]; then
         echo "✗ Stage must be dev, staging, or prod; got: {{ stage }}"
         exit 1
@@ -198,14 +222,14 @@ deploy slug stage image_tag="": (_check-slug slug)
     fi
 
     echo "Granting ${BACKEND_SA_NAME} access to gs://${SIMULATION_BUCKET}..."
-    gcloud storage buckets add-iam-policy-binding "gs://${SIMULATION_BUCKET}" \
+    retry_gcloud gcloud storage buckets add-iam-policy-binding "gs://${SIMULATION_BUCKET}" \
         --member="serviceAccount:${BACKEND_SA}" \
         --role="roles/storage.objectUser" \
         --project="${GCP_PROJECT_ID}" \
         --quiet >/dev/null
 
     echo "Deploying ${JOB_NAME} with ${PINNED_IMAGE}..."
-    gcloud run jobs deploy "${JOB_NAME}" \
+    retry_gcloud gcloud run jobs deploy "${JOB_NAME}" \
         --image="${PINNED_IMAGE}" \
         --region="${GCP_REGION}" \
         --project="${GCP_PROJECT_ID}" \
@@ -340,7 +364,7 @@ lint:
 # repository/owner IDs rather than reusable names.
 #
 # Usage:
-#   just setup-release-gar owner/purelms-interactive-tasks project-id region repo
+# just setup-release-gar owner/purelms-interactive-tasks project-id region repo
 setup-release-gar github_repo project_id region gar_repository:
     #!/usr/bin/env bash
     set -euo pipefail

@@ -119,6 +119,10 @@ at `latest`. Prod uses `purelms-itask-<slug>`, while dev and staging append the
 stage name. Each stage gets a dedicated `purelms-sim-<stage>` runtime service
 account with simulation-bucket and worker-callback access only.
 
+On the first deployment to a stage, Google Cloud can take a minute or more to
+make that new service account visible to Cloud Storage and Cloud Run. The
+recipe retries those cross-service operations with capped exponential backoff.
+
 Built images carry OCI labels for the repository release version, source
 revision, source repository, backend slug, and InteractiveTask manifest
 version. These labels support operator inventory; the immutable image digest
