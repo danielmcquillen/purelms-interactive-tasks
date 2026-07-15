@@ -24,13 +24,11 @@ Then:
    - `name` to `@purelms-interactive-tasks/<your-slug-with-hyphens>-frontend`
    - `build`/`watch` scripts to point at `src/<your_slug>.ts`
    - `--outfile` to `dist/<your_slug>.js`
-7. Add `"my_new_task/backend"` to the workspace root
-   `pyproject.toml`'s `[tool.uv.workspace.members]`.
-8. If this is an officially published backend, add it to `backends.toml`, add
-   `my_new_task` to the root justfile's `slugs` value, and add it to the release
-   workflow matrix. Update the Dockerfile's backend-slug and task-version label
-   defaults too.
-9. Build + test: `just test my_new_task && just smoke my_new_task`. The smoke
+7. If this is an officially published backend, add one record to
+   `backends.toml`. The workspace, aggregate Just recipes, release matrix, and
+   deployment registration derive membership automatically. Update the
+   Dockerfile's backend-slug and task-version label defaults too.
+8. Build + test: `just test my_new_task && just smoke my_new_task`. The smoke
    recipe builds and runs `linux/amd64`, matching Cloud Run and running under
    Docker Desktop emulation on Apple Silicon.
 10. Install into a PureLMS instance:

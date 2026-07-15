@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -12,6 +13,7 @@ import tomllib
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+from scripts.backend_inventory import build_registration_catalog  # noqa: E402
 from scripts.validate_release_assets import validate_release_assets  # noqa: E402
 
 JUSTFILE = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
@@ -53,17 +55,58 @@ def _manifest_value(path: Path, field: str) -> str:
     return match.group(1)
 
 
-def test_release_slug_list_matches_workflow_matrix() -> None:
-    """Inventory, deploy-all, and release CI must publish the same set."""
-    slugs_match = re.search(r'^slugs := "([^"]+)"$', JUSTFILE, re.MULTILINE)
-    matrix_match = re.search(r"slug: \[([^]]+)]", RELEASE_WORKFLOW)
+def test_release_inventory_drives_just_and_github_actions() -> None:
+    """Aggregate tooling must consume membership instead of redeclaring it."""
+    assert (
+        "slugs := `python3 scripts/backend_inventory.py list --format words`"
+        in JUSTFILE
+    )
+    assert "python3 scripts/backend_inventory.py matrix" in RELEASE_WORKFLOW
+    assert (
+        "matrix: ${{ fromJSON(needs.verify-signed-tag.outputs.backend-matrix) }}"
+        in RELEASE_WORKFLOW
+    )
+    assert "slug: [echo," not in RELEASE_WORKFLOW
 
-    assert slugs_match is not None
-    assert matrix_match is not None
-    just_slugs = slugs_match.group(1).split()
-    workflow_slugs = [item.strip() for item in matrix_match.group(1).split(",")]
-    inventory_slugs = [backend["slug"] for backend in BACKENDS if backend["release"]]
-    assert inventory_slugs == just_slugs == workflow_slugs
+
+def test_registration_catalog_uses_tagged_inventory_and_manifests() -> None:
+    """Deployment registration pairs every declared manifest with one image."""
+    tagged_inventory = tomllib.loads(
+        subprocess.run(
+            ["git", "show", "HEAD:backends.toml"],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout,
+    )
+    released = [
+        backend for backend in tagged_inventory["backend"] if backend["release"]
+    ]
+    images = {
+        backend["slug"]: f"registry.example/{backend['image_name']}@sha256:{'a' * 64}"
+        for backend in released
+    }
+
+    catalog = build_registration_catalog(
+        release_ref="HEAD",
+        image_by_slug=images,
+    )
+
+    assert catalog["schema_version"] == 1
+    assert [entry["slug"] for entry in catalog["backends"]] == [
+        backend["slug"] for backend in released
+    ]
+    for backend, entry in zip(released, catalog["backends"], strict=True):
+        assert entry["image_uri"] == images[backend["slug"]]
+        tagged_manifest = subprocess.run(
+            ["git", "show", f"HEAD:{backend['manifest']}"],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert entry["manifest_yaml"] == tagged_manifest
 
 
 def test_backend_inventory_paths_and_contracts() -> None:
@@ -201,7 +244,7 @@ def test_python_lock_uses_patched_cryptography() -> None:
 
 def test_frontend_locks_use_patched_test_toolchain() -> None:
     """Shipped frontend locks keep Vite, Vitest, and Happy DOM above advisories."""
-    for slug in ("echo", "energyplus_single_zone", "modelica_diagram"):
+    for slug in [backend["slug"] for backend in BACKENDS if backend["release"]]:
         lock_path = REPO_ROOT / slug / "frontend/package-lock.json"
         lock = json.loads(lock_path.read_text(encoding="utf-8"))
         packages = lock["packages"]
@@ -258,7 +301,11 @@ def test_local_build_uses_cloud_run_architecture() -> None:
 
 def test_native_binary_images_reject_accidental_arm64_builds() -> None:
     """Direct Docker builds cannot create mixed-architecture native images."""
-    for slug in ("energyplus_single_zone", "modelica_diagram"):
+    for slug in [
+        backend["slug"]
+        for backend in BACKENDS
+        if backend["native_payload"] != "portable-python"
+    ]:
         dockerfile = (REPO_ROOT / slug / "backend/Dockerfile").read_text(
             encoding="utf-8",
         )

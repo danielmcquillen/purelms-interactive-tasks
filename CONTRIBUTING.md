@@ -38,12 +38,11 @@ Docker images derive a hyphenated alias at tooling boundaries: slug `energyplus_
 
 1. **Copy the template.** `cp -r _template <your_slug>` is the fastest start.
 2. **Fill in `interactive_task.yaml`.** Required: `schema_version: "purelms.interactive_task.v1"`, `slug`, `name`, `version`, `description`, `backend` (image, credit_cost, trust_tier, execution_mode, default_timeout_seconds), `frontend.bundle`. Recommended: `parameters`, `outputs`, `lms_context_used`, `lms_outcomes`. See the manifest section of [`BACKEND_AUTHORING_GUIDE.md`](BACKEND_AUTHORING_GUIDE.md).
-3. **Add to the workspace.** Append `"<your_slug>/backend"` to `pyproject.toml`'s `[tool.uv.workspace.members]` array.
-   For an officially published backend, also add a record to `backends.toml`,
-   add `<your_slug>` to the justfile's `slugs` value, and add it to
-   `.github/workflows/release.yml`'s matrix. Aggregate build, frontend, test,
-   smoke, release, and deploy recipes derive from those declarations; contract
-   tests prevent them from drifting.
+3. **Declare an official backend once.** Add its record to `backends.toml`.
+   The uv workspace discovers `<your_slug>/backend` by glob, while aggregate
+   build, frontend, test, smoke, release, and deploy registration all derive
+   released membership from that inventory. Do not edit a Just or workflow
+   slug list; none exists by design.
 4. **Implement the container** (`backend/main.py`) using `purelms_itask_runtime` as shown in `_template/backend/main.py`:
    - Create a `RuntimeLocation` and read the `SimulationInputEnvelope` with `read_input_envelope()`.
    - Do the domain work.

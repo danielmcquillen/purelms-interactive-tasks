@@ -69,6 +69,8 @@ jobs:
   verify-signed-tag:
     name: Verify tag signature and create release
     runs-on: ubuntu-latest
+    outputs:
+      backend-matrix: ${{ steps.backend-matrix.outputs.matrix }}
     permissions:
       # Lets us create the GitHub release once, here, so the parallel
       # matrix jobs below can attach SBOMs without racing on creation.
@@ -113,6 +115,10 @@ jobs:
       - name: Validate release assets and native architectures
         run: python3 scripts/validate_release_assets.py
 
+      - name: Load released backends from the authoritative inventory
+        id: backend-matrix
+        run: echo "matrix=$(python3 scripts/backend_inventory.py matrix)" >> "$GITHUB_OUTPUT"
+
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -133,11 +139,7 @@ jobs:
     strategy:
       # Don't cancel siblings on one failure — see all failure modes at once.
       fail-fast: false
-      matrix:
-        # The backend directory slugs (snake_case). Keep in sync with
-        # backends.toml and the justfile ``slugs`` variable; contract tests
-        # enforce the three-way match. Echo is the permanent smoke fixture.
-        slug: [echo, energyplus_single_zone, modelica_diagram]
+      matrix: ${{ fromJSON(needs.verify-signed-tag.outputs.backend-matrix) }}
 
     permissions:
       # OIDC token exchange (GHCR push, GCP WIF, and the attestation step).

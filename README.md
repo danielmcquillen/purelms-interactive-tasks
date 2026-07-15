@@ -63,13 +63,14 @@ The [`BACKEND_AUTHORING_GUIDE.md`](BACKEND_AUTHORING_GUIDE.md) is the in-repo re
 
 1. `cp -r _template <your_slug>` (or `mkdir <your_slug>/{backend,frontend}` from scratch).
 2. Fill in `<your_slug>/interactive_task.yaml` (identity, backend image URI, frontend bundle filename, parameters, outputs, lms_outcomes rules).
-3. Add `<your_slug>/backend` to `pyproject.toml`'s `[tool.uv.workspace.members]`.
-4. For an officially published backend, add a record to `backends.toml`, add
-   the slug to `slugs` in the justfile, and add it to the matching
-   release-workflow matrix. Contract tests keep all three surfaces aligned.
-5. Implement `backend/main.py` + `backend/Dockerfile` using the runtime helper in `_template/backend/main.py`. It handles both local-directory and Cloud Run/GCS envelope I/O.
-6. Implement `frontend/src/<slug>.ts` exporting `mount(...)`. Build to `frontend/dist/<slug>.js`.
-7. Add tests under `backend/tests/` and `frontend/tests/`.
+3. For an officially published backend, add one record to `backends.toml`.
+   That inventory is the single source of released-backend membership for
+   aggregate Just recipes, the GitHub Actions release matrix, and deployment
+   registration. The uv workspace discovers `<your_slug>/backend`
+   structurally.
+4. Implement `backend/main.py` + `backend/Dockerfile` using the runtime helper in `_template/backend/main.py`. It handles both local-directory and Cloud Run/GCS envelope I/O.
+5. Implement `frontend/src/<slug>.ts` exporting `mount(...)`. Build to `frontend/dist/<slug>.js`.
+6. Add tests under `backend/tests/` and `frontend/tests/`.
 8. Run `just test <your_slug>` and `just smoke <your_slug>`. The smoke recipe builds and executes the same `linux/amd64` target used by Cloud Run; Docker Desktop emulates it on Apple Silicon.
 9. Install into a PureLMS instance:
    ```bash
@@ -118,6 +119,11 @@ Registry digest and deploys `IMAGE@sha256:...`; the Cloud Run Job never points
 at `latest`. Prod uses `purelms-itask-<slug>`, while dev and staging append the
 stage name. Each stage gets a dedicated `purelms-sim-<stage>` runtime service
 account with simulation-bucket and worker-callback access only.
+
+After deployment, one `purelms-register-backends[-<stage>]` Job reconciles the
+tagged inventory into the LMS. `deploy-all` submits every released entry in one
+transactional catalog; `deploy <slug>` submits one selected entry through the
+same Job. Missing catalog entries are never deactivated implicitly.
 
 On the first deployment to a stage, Google Cloud can take a minute or more to
 make that new service account visible to Cloud Storage and Cloud Run. The

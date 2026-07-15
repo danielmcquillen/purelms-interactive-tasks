@@ -40,10 +40,10 @@ vim interactive_task.yaml
 mv frontend/src/placeholder.ts frontend/src/my_first_task.ts
 mv frontend/tests/placeholder.test.ts frontend/tests/my_first_task.test.ts
 
-# 4. Add the backend to the workspace.
+# 4. Declare the backend once in the authoritative inventory.
 cd ..
-# Append "my_first_task/backend" to pyproject.toml's [tool.uv.workspace.members]
-vim pyproject.toml
+# Add a [[backend]] record; workspace/build/test/release membership derives here.
+vim backends.toml
 
 # 5. Build + test.
 just build my_first_task
@@ -578,9 +578,10 @@ ENTRYPOINT ["python", "main.py"]
   environment files, key material, tests, caches, or domain build scratch into
   the Docker build context.
 
-For an official backend, add it to `backends.toml` as well as the justfile and
-release matrix. `backends.toml` records its paths, image name, shared-contract
-floor, supported platform, and whether it embeds a native payload.
+For an official backend, add one record to `backends.toml`. That inventory
+records its paths, image name, shared-contract floor, supported platform, and
+native-payload type, and directly drives aggregate Just recipes, the release
+matrix, and deployment registration. Do not add a parallel slug list elsewhere.
 
 ### `__metadata__.py` — informational self-description
 

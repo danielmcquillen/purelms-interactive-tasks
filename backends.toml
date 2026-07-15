@@ -1,8 +1,8 @@
 schema_version = 1
 
-# Authoritative inventory of backend container images. The justfile and release
-# workflow remain intentionally explicit; repository contract tests compare
-# both against this file so a new backend cannot be omitted from a release.
+# Authoritative inventory of released backend container images. Aggregate Just
+# recipes, the release workflow matrix, and LMS registration catalogs all read
+# membership from this file so a backend is declared exactly once.
 
 [[backend]]
 slug = "echo"

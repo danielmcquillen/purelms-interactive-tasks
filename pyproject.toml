@@ -36,18 +36,16 @@ dependencies = [
 # is gone (audit P0-2 closed; matches validibot-shared's model).
 
 [tool.uv.workspace]
-# Each InteractiveTask's backend/ is its own workspace member with
-# its own pyproject.toml at <slug>/backend/. New InteractiveTasks get
-# added here.
+# Every top-level InteractiveTask backend is discovered structurally. The
+# template is excluded because it is scaffolding, not a released package.
 members = [
-    "echo/backend",
-    "energyplus_single_zone/backend",
-    "modelica_diagram/backend",
+    "*/backend",
     # Shared backend runtime helper (local-dir vs GCS envelope I/O +
     # progress/complete worker callbacks). Vendored into each backend
     # image's _vendor/ wheel like purelms-shared; see the justfile.
     "_shared_backends/purelms_itask_runtime",
 ]
+exclude = ["_template/backend"]
 
 [project.optional-dependencies]
 dev = [

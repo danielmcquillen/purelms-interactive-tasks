@@ -11,10 +11,9 @@
 #     (purelms-itask-<slug-with-hyphens>:<version>)
 #   - The s/_/-/g conversion is done once, here in the justfile.
 
-# Backend slugs published as release images. Keep in sync with `backends.toml`
-# and the `matrix.slug` list in .github/workflows/release.yml. Contract tests
-# enforce the three-way match. `echo` is the permanent demo/smoke backend.
-slugs := "echo energyplus_single_zone modelica_diagram"
+# Backend membership comes only from ``backends.toml``. The same helper feeds
+# aggregate Just recipes, the release matrix, and deployment registration.
+slugs := `python3 scripts/backend_inventory.py list --format words`
 target_platform := "linux/amd64"
 git_sha := `git rev-parse --short HEAD 2>/dev/null || echo "unknown"`
 repo_version := `sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -1`
