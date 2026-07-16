@@ -260,6 +260,35 @@ def test_backend_metadata_and_image_labels_match_task_version() -> None:
     assert "uv export --frozen" in RELEASE_WORKFLOW
 
 
+def test_cloud_runtime_locks_google_auth_requests_transport() -> None:
+    """Release images must be able to mint callback OIDC tokens."""
+    runtime_project = tomllib.loads(
+        (REPO_ROOT / "_shared_backends/purelms_itask_runtime/pyproject.toml").read_text(
+            encoding="utf-8"
+        ),
+    )
+    assert runtime_project["project"]["optional-dependencies"]["cloud"] == [
+        "google-auth[requests]>=2.20",
+    ]
+
+    lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text(encoding="utf-8"))
+    runtime_package = next(
+        package
+        for package in lock["package"]
+        if package["name"] == "purelms-itask-runtime"
+    )
+    assert runtime_package["optional-dependencies"]["cloud"] == [
+        {"name": "google-auth", "extra": ["requests"]},
+    ]
+    assert any(package["name"] == "requests" for package in lock["package"])
+
+    for backend in BACKENDS:
+        dockerfile = (REPO_ROOT / backend["slug"] / "backend/Dockerfile").read_text(
+            encoding="utf-8",
+        )
+        assert "from google.auth.transport.requests import Request" in dockerfile
+
+
 def test_release_jobs_checkout_the_requested_signed_tag() -> None:
     """Manual recovery builds must use tagged source in both release jobs."""
     checkout_ref = "ref: ${{ inputs.tag || github.ref }}"

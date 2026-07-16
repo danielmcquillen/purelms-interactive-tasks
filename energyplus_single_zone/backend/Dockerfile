@@ -67,7 +67,7 @@ ARG PURELMS_IMAGE_VERSION="dev"
 ARG PURELMS_IMAGE_REVISION="unknown"
 ARG PURELMS_IMAGE_SOURCE="https://github.com/danielmcquillen/purelms-interactive-tasks"
 ARG PURELMS_BACKEND_SLUG="energyplus_single_zone"
-ARG PURELMS_TASK_VERSION="0.2.3"
+ARG PURELMS_TASK_VERSION="0.2.4"
 ARG PURELMS_SHARED_VERSION="0.5.0"
 
 LABEL org.opencontainers.image.title="PureLMS EnergyPlus Single-Zone InteractiveTask backend" \
@@ -92,8 +92,8 @@ ENV PATH="/opt/energyplus:${PATH}"
 # Python deps: install the shared backend runtime (with its ``cloud``
 # extra) from the vendored wheels (staged by the justfile). The shared
 # contract and all external packages use the signed tag's uv.lock constraints.
-# google-auth provides callback OIDC; object I/O uses signed HTTPS URLs. No
-# scientific deps: the runner shells out to the binary + parses
+# google-auth[requests] provides the callback OIDC transport; object I/O uses
+# signed HTTPS URLs. No scientific deps: the runner shells out and parses
 # eplusout.sql with the stdlib sqlite3.
 WORKDIR /home/purelms
 COPY pyproject.toml ./
@@ -102,6 +102,7 @@ RUN pip install --no-cache-dir --find-links /vendor \
     --constraint /vendor/constraints.txt \
     "purelms-shared==${PURELMS_SHARED_VERSION}" \
     "purelms-itask-runtime[cloud]"
+RUN python -c "from google.auth.transport.requests import Request"
 
 # Non-root runtime user (uid 1000, matches the run-scoped-isolation policy).
 RUN useradd --create-home --uid 1000 purelms

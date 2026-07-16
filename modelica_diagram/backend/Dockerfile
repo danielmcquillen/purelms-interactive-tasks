@@ -20,13 +20,15 @@ COPY *.py ./
 COPY _vendor/ /tmp/_vendor/
 ARG PURELMS_SHARED_VERSION="0.5.0"
 # runtime[cloud] uses the vendored wheels plus uv.lock-constrained external
-# packages. google-auth provides callback OIDC; object I/O uses signed HTTPS.
+# packages. google-auth[requests] provides the callback OIDC transport.
 RUN pip install --no-cache-dir --target /pkgs \
     --find-links /tmp/_vendor \
     --constraint /tmp/_vendor/constraints.txt \
     "purelms-shared==${PURELMS_SHARED_VERSION}" \
     "purelms-itask-runtime[cloud]" \
     "fmpy>=0.3,<1" "numpy>=1.26" "jsonschema>=4.0,<5"
+RUN PYTHONPATH=/pkgs python -c \
+    "from google.auth.transport.requests import Request"
 
 FROM python:3.13-slim AS runtime
 RUN test "$(uname -m)" = x86_64
@@ -35,7 +37,7 @@ ARG PURELMS_IMAGE_VERSION="dev"
 ARG PURELMS_IMAGE_REVISION="unknown"
 ARG PURELMS_IMAGE_SOURCE="https://github.com/danielmcquillen/purelms-interactive-tasks"
 ARG PURELMS_BACKEND_SLUG="modelica_diagram"
-ARG PURELMS_TASK_VERSION="0.2.4"
+ARG PURELMS_TASK_VERSION="0.2.5"
 ARG PURELMS_SHARED_VERSION="0.5.0"
 
 LABEL org.opencontainers.image.title="PureLMS Modelica Diagram InteractiveTask backend" \

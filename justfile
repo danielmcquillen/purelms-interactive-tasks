@@ -57,8 +57,9 @@ _stage-shared-wheel slug shared_path=env_var_or_default("PURELMS_SHARED_PATH", "
     # Also stage the in-repo shared backend-runtime wheel (local-dir vs
     # GCS envelope I/O + progress/complete worker callbacks). The
     # Dockerfile installs ``purelms-itask-runtime[cloud]`` from _vendor/,
-    # which pulls the purelms-shared wheel staged above plus google-auth
-    # for callback OIDC tokens. Object I/O uses signed HTTPS URLs.
+    # which pulls the purelms-shared wheel staged above plus
+    # google-auth[requests] for callback OIDC tokens. Object I/O uses signed
+    # HTTPS URLs.
     cd "{{ justfile_directory() }}/_shared_backends/purelms_itask_runtime" && uv build --wheel --out-dir "{{ justfile_directory() }}/{{ slug }}/backend/_vendor"
     uv export --frozen --no-dev --all-packages --extra cloud \
         --no-emit-workspace --no-hashes --no-annotate --no-header \

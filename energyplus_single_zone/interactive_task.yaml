@@ -14,15 +14,16 @@
 #
 # Bumped 0.1.0 → 0.2.0 (real EnergyPlus) → 0.2.1 (lms_outcomes grading
 # rule) → 0.2.2 (frontend.reports_progress capability flag) → 0.2.3
-# (authenticated callback runtime and frontend hardening). Re-install with
-# ``--replace-active`` to make 0.2.3 the authoring default; existing blocks
+# (authenticated callbacks and frontend hardening) → 0.2.4 (complete OIDC
+# transport dependencies). Re-install with ``--replace-active`` to make 0.2.4
+# the authoring default; existing blocks
 # retain their exact pin until an author upgrades them.
 
 schema_version: "purelms.interactive_task.v1"
 
 slug: energyplus_single_zone
 name: EnergyPlus Single-Zone
-version: 0.2.3
+version: 0.2.4
 description: |
   Single-zone building-energy InteractiveTask. The learner picks a
   glazing U-value, window area, and climate zone; the backend

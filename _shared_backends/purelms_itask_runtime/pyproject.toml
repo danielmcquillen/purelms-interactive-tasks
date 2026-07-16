@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "purelms-itask-runtime"
-version = "0.1.0"
+version = "0.1.1"
 description = "Shared runtime helper for PureLMS InteractiveTask backend containers: local or signed-object envelope I/O plus authenticated callbacks."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,7 +23,7 @@ dependencies = [
 # (sync) path reads/writes local dirs and posts no callbacks, so it runs
 # without them. The deployed image installs ``purelms-itask-runtime[cloud]``.
 cloud = [
-    "google-auth>=2.20",
+    "google-auth[requests]>=2.20",
 ]
 dev = [
     "pytest>=8.0,<10",

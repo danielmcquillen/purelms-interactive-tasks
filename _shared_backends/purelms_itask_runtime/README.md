@@ -42,10 +42,10 @@ and evidence identity. Local runs may omit all cloud fields.
 
 ## Extras
 
-`google-auth` is needed only on the async Cloud Run image for OIDC-authenticated
-callbacks. It lives under the
-`cloud` extra and are imported lazily + guarded, so the local/dev path
-runs without them. The deployed image installs
+`google-auth` and its Requests transport are needed only on the async Cloud Run
+image for OIDC-authenticated callbacks. They live under the `cloud` extra and
+are imported lazily and guarded, so the local/dev path runs without them. The
+deployed image installs
 `purelms-itask-runtime[cloud]`.
 
 ## Why it lives in `_shared_backends/`

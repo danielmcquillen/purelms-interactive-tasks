@@ -29,9 +29,10 @@ The mode is read from the environment's *shape* (which env vars are set,
 whether the callback URL is ``http(s)`` vs the ``file://`` sentinel) — a
 backend never branches on "am I local or cloud".
 
-``google-auth`` is required only for OIDC callback tokens on Cloud Run and is
-imported lazily. Object I/O uses the standard library against signed URLs, so
-backend identities hold no bucket permissions and need no storage SDK.
+``google-auth`` with its Requests transport is required only for OIDC callback
+tokens on Cloud Run and is imported lazily. Object I/O uses the standard
+library against signed URLs, so backend identities hold no bucket permissions
+and need no storage SDK.
 """
 
 from __future__ import annotations
@@ -474,8 +475,9 @@ def _fetch_id_token(audience: str) -> str:
         msg = "callback audience is empty; refusing an unauthenticated request"
         raise CallbackAuthenticationError(msg)
     try:
-        # Lazy import: ``google-auth`` is in the cloud image only. HTTP
-        # callbacks are also cloud-only, so absence is a deployment failure.
+        # Lazy import: the ``google-auth[requests]`` transport is in the cloud
+        # image only. HTTP callbacks are cloud-only, so absence is a deployment
+        # failure.
         from google.auth.transport import requests as ga_requests  # noqa: PLC0415
         from google.oauth2 import id_token  # noqa: PLC0415
 

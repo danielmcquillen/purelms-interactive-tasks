@@ -23,14 +23,16 @@ ARG PURELMS_SHARED_VERSION="0.5.0"
 # _stage-shared-wheel recipe): purelms_shared-*.whl + the shared
 # purelms_itask_runtime-*.whl. Install the runtime with its ``cloud``
 # extra: pip resolves the runtime + purelms-shared from --find-links and uses
-# the uv.lock constraints for external packages. google-auth provides callback
-# OIDC; object I/O uses signed HTTPS URLs and the standard library.
+# the uv.lock constraints for external packages. google-auth[requests] provides
+# the callback OIDC transport; object I/O uses signed URLs and the stdlib.
 COPY _vendor/ /tmp/_vendor/
 RUN pip install --no-cache-dir --target /pkgs \
     --find-links /tmp/_vendor \
     --constraint /tmp/_vendor/constraints.txt \
     "purelms-shared==${PURELMS_SHARED_VERSION}" \
     "purelms-itask-runtime[cloud]"
+RUN PYTHONPATH=/pkgs python -c \
+    "from google.auth.transport.requests import Request"
 
 FROM python:3.13-slim AS runtime
 
@@ -38,7 +40,7 @@ ARG PURELMS_IMAGE_VERSION="dev"
 ARG PURELMS_IMAGE_REVISION="unknown"
 ARG PURELMS_IMAGE_SOURCE="https://github.com/danielmcquillen/purelms-interactive-tasks"
 ARG PURELMS_BACKEND_SLUG="echo"
-ARG PURELMS_TASK_VERSION="0.1.1"
+ARG PURELMS_TASK_VERSION="0.1.2"
 ARG PURELMS_SHARED_VERSION="0.5.0"
 
 LABEL org.opencontainers.image.title="PureLMS Echo InteractiveTask backend" \
