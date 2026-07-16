@@ -158,6 +158,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          # A manual retry runs this workflow from the default branch but must
+          # still build the immutable source selected by the signed tag.
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4.0.0
@@ -204,10 +208,12 @@ jobs:
           OWNER_LC="$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')"
           IMAGE_SLUG="$(echo "$SLUG" | tr '_' '-')"
           GHCR_IMAGE="ghcr.io/${OWNER_LC}/purelms-itask-${IMAGE_SLUG}"
+          REVISION="$(git rev-parse HEAD)"
           {
             echo "ghcr_image=${GHCR_IMAGE}"
             echo "image_slug=${IMAGE_SLUG}"
             echo "tag=${TAG_REF}"
+            echo "revision=${REVISION}"
             echo "ghcr_full_ref=${GHCR_IMAGE}:${TAG_REF}"
           } >> "$GITHUB_OUTPUT"
 
@@ -227,10 +233,9 @@ jobs:
             ${{ steps.image-ref.outputs.ghcr_image }}:latest
           build-args: |
             PURELMS_IMAGE_VERSION=${{ steps.image-ref.outputs.tag }}
-            PURELMS_IMAGE_REVISION=${{ github.sha }}
+            PURELMS_IMAGE_REVISION=${{ steps.image-ref.outputs.revision }}
             PURELMS_IMAGE_SOURCE=https://github.com/${{ github.repository }}
             PURELMS_BACKEND_SLUG=${{ matrix.slug }}
-            PURELMS_SHARED_VERSION=${{ matrix.shared_contract_floor }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
           provenance: mode=max

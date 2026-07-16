@@ -254,10 +254,22 @@ def test_backend_metadata_and_image_labels_match_task_version() -> None:
         ):
             assert label in dockerfile
 
-    assert "PURELMS_SHARED_VERSION=${{ matrix.shared_contract_floor }}" in (
+    # The release matrix intentionally carries membership only. Each tagged
+    # Dockerfile pins the validated shared-contract version as its ARG default.
+    assert "matrix.shared_contract_floor" not in RELEASE_WORKFLOW
+    assert "uv export --frozen" in RELEASE_WORKFLOW
+
+
+def test_release_jobs_checkout_the_requested_signed_tag() -> None:
+    """Manual recovery builds must use tagged source in both release jobs."""
+    checkout_ref = "ref: ${{ inputs.tag || github.ref }}"
+
+    assert RELEASE_WORKFLOW.count(checkout_ref) == 2
+    assert 'REVISION="$(git rev-parse HEAD)"' in RELEASE_WORKFLOW
+    assert "PURELMS_IMAGE_REVISION=${{ steps.image-ref.outputs.revision }}" in (
         RELEASE_WORKFLOW
     )
-    assert "uv export --frozen" in RELEASE_WORKFLOW
+    assert "PURELMS_IMAGE_REVISION=${{ github.sha }}" not in RELEASE_WORKFLOW
 
 
 def test_backend_build_contexts_exclude_credentials_and_local_noise() -> None:
