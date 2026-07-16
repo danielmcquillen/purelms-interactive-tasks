@@ -67,14 +67,16 @@ ARG PURELMS_IMAGE_VERSION="dev"
 ARG PURELMS_IMAGE_REVISION="unknown"
 ARG PURELMS_IMAGE_SOURCE="https://github.com/danielmcquillen/purelms-interactive-tasks"
 ARG PURELMS_BACKEND_SLUG="energyplus_single_zone"
-ARG PURELMS_TASK_VERSION="0.2.2"
+ARG PURELMS_TASK_VERSION="0.2.3"
+ARG PURELMS_SHARED_VERSION="0.5.0"
 
 LABEL org.opencontainers.image.title="PureLMS EnergyPlus Single-Zone InteractiveTask backend" \
       org.opencontainers.image.version="${PURELMS_IMAGE_VERSION}" \
       org.opencontainers.image.revision="${PURELMS_IMAGE_REVISION}" \
       org.opencontainers.image.source="${PURELMS_IMAGE_SOURCE}" \
       io.purelms.interactive-task.slug="${PURELMS_BACKEND_SLUG}" \
-      io.purelms.interactive-task.version="${PURELMS_TASK_VERSION}"
+      io.purelms.interactive-task.version="${PURELMS_TASK_VERSION}" \
+      io.purelms.shared-contract.version="${PURELMS_SHARED_VERSION}"
 
 # EnergyPlus runtime libs: libgomp1 (OpenMP), libx11-6 + libxext6 (the
 # binary links X11 even headless). sudo is intentionally absent.
@@ -88,17 +90,18 @@ COPY --from=eplus-builder /opt/weather /opt/weather
 ENV PATH="/opt/energyplus:${PATH}"
 
 # Python deps: install the shared backend runtime (with its ``cloud``
-# extra) from the vendored wheels (staged by the justfile). pip resolves
-# purelms-itask-runtime + purelms-shared from --find-links /vendor and
-# pulls google-cloud-storage / google-auth (GCS envelope I/O + OIDC for
-# the worker callbacks) from PyPI — so the same image meets the runtime
-# contract on the local DockerCompose AND the Cloud Run Jobs path. No
+# extra) from the vendored wheels (staged by the justfile). The shared
+# contract and all external packages use the signed tag's uv.lock constraints.
+# google-auth provides callback OIDC; object I/O uses signed HTTPS URLs. No
 # scientific deps: the runner shells out to the binary + parses
 # eplusout.sql with the stdlib sqlite3.
 WORKDIR /home/purelms
 COPY pyproject.toml ./
 COPY _vendor /vendor/
-RUN pip install --no-cache-dir --find-links /vendor "purelms-itask-runtime[cloud]"
+RUN pip install --no-cache-dir --find-links /vendor \
+    --constraint /vendor/constraints.txt \
+    "purelms-shared==${PURELMS_SHARED_VERSION}" \
+    "purelms-itask-runtime[cloud]"
 
 # Non-root runtime user (uid 1000, matches the run-scoped-isolation policy).
 RUN useradd --create-home --uid 1000 purelms

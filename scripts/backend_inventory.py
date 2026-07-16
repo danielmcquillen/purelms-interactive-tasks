@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -23,6 +25,15 @@ import tomllib
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INVENTORY_PATH = REPO_ROOT / "backends.toml"
 CATALOG_SCHEMA_VERSION = 1
+JOB_NAME_MAX_LENGTH = 49
+JOB_NAME_PREFIX = "purelms-itask-"
+SEMVER_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+SLUG_RE = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)*$")
+STAGE_SUFFIX = {"prod": "", "staging": "-stg", "dev": "-dev"}
+VERSION_LINE_RE = re.compile(
+    r"^version:\s*[\"']?([0-9]+\.[0-9]+\.[0-9]+)[\"']?\s*(?:#.*)?$",
+    re.MULTILINE,
+)
 
 
 def _git_text(release_ref: str, relative_path: str) -> str:
@@ -102,9 +113,71 @@ def parse_image_assignments(values: list[str]) -> dict[str, str]:
     return images
 
 
+def manifest_version(manifest_yaml: str) -> str:
+    """Return the release SemVer declared by one task manifest."""
+    match = VERSION_LINE_RE.search(manifest_yaml)
+    if match is None:
+        msg = "interactive_task.yaml version must use release SemVer X.Y.Z"
+        raise ValueError(msg)
+    return match.group(1)
+
+
+def cloud_run_job_name(*, slug: str, version: str, stage: str) -> str:
+    """Return the immutable Cloud Run Job name for one task release.
+
+    Cloud Run Job names are limited to 49 characters. Normal names retain the
+    full task slug. A long slug is shortened deterministically and receives a
+    hash of its complete release identity, preserving collision resistance.
+    """
+    if SLUG_RE.fullmatch(slug) is None:
+        msg = f"invalid backend slug: {slug!r}"
+        raise ValueError(msg)
+    if SEMVER_RE.fullmatch(version) is None:
+        msg = f"backend version must be X.Y.Z; got {version!r}"
+        raise ValueError(msg)
+    if stage not in STAGE_SUFFIX:
+        msg = f"stage must be one of {', '.join(STAGE_SUFFIX)}; got {stage!r}"
+        raise ValueError(msg)
+
+    readable_slug = slug.replace("_", "-")
+    version_token = f"-v{version.replace('.', '-')}"
+    stage_suffix = STAGE_SUFFIX[stage]
+    candidate = f"{JOB_NAME_PREFIX}{readable_slug}{version_token}{stage_suffix}"
+    if len(candidate) <= JOB_NAME_MAX_LENGTH:
+        return candidate
+
+    identity_hash = hashlib.sha256(
+        f"{slug}@{version}:{stage}".encode(),
+    ).hexdigest()[:8]
+    reserved = len(JOB_NAME_PREFIX) + 1 + len(identity_hash) + len(version_token)
+    reserved += len(stage_suffix)
+    readable_length = JOB_NAME_MAX_LENGTH - reserved
+    if readable_length < 1:  # Defensive: current prefix/version caps leave room.
+        msg = "backend release identity cannot fit in a Cloud Run Job name"
+        raise ValueError(msg)
+    shortened = readable_slug[:readable_length].rstrip("-")
+    return f"{JOB_NAME_PREFIX}{shortened}-{identity_hash}{version_token}{stage_suffix}"
+
+
+def tagged_manifest(
+    *,
+    release_ref: str,
+    slug: str,
+) -> tuple[dict[str, Any], str]:
+    """Return one released inventory record and its tagged manifest text."""
+    matches = released_backends(release_ref=release_ref, selected_slugs=[slug])
+    backend = matches[0]
+    manifest_path = backend.get("manifest")
+    if not isinstance(manifest_path, str) or not manifest_path:
+        msg = f"backend {slug!r} has no manifest path"
+        raise ValueError(msg)
+    return backend, _git_text(release_ref, manifest_path)
+
+
 def build_registration_catalog(
     *,
     release_ref: str,
+    stage: str,
     image_by_slug: dict[str, str],
     selected_slugs: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -139,11 +212,17 @@ def build_registration_catalog(
         if not isinstance(manifest_path, str) or not manifest_path:
             msg = f"backend {slug!r} has no manifest path"
             raise ValueError(msg)
+        manifest_yaml = _git_text(release_ref, manifest_path)
         entries.append(
             {
                 "slug": slug,
-                "manifest_yaml": _git_text(release_ref, manifest_path),
+                "manifest_yaml": manifest_yaml,
                 "image_uri": image_by_slug[slug],
+                "cloud_run_job_name": cloud_run_job_name(
+                    slug=slug,
+                    version=manifest_version(manifest_yaml),
+                    stage=stage,
+                ),
             },
         )
 
@@ -178,9 +257,29 @@ def _parser() -> argparse.ArgumentParser:
         help="Build a tagged manifest/image registration catalog.",
     )
     catalog_parser.add_argument("--release-ref", required=True)
+    catalog_parser.add_argument(
+        "--stage",
+        choices=tuple(STAGE_SUFFIX),
+        required=True,
+    )
     catalog_parser.add_argument("--slug", action="append", default=[])
     catalog_parser.add_argument("--image", action="append", default=[])
     catalog_parser.add_argument("--base64", action="store_true")
+
+    job_parser = subparsers.add_parser(
+        "job-name",
+        help="Print the exact versioned Cloud Run Job name.",
+    )
+    job_parser.add_argument("--release-ref", required=True)
+    job_parser.add_argument("--slug", required=True)
+    job_parser.add_argument("--stage", choices=tuple(STAGE_SUFFIX), required=True)
+
+    version_parser = subparsers.add_parser(
+        "task-version",
+        help="Print a task's manifest version from one release ref.",
+    )
+    version_parser.add_argument("--release-ref", required=True)
+    version_parser.add_argument("--slug", required=True)
     return parser
 
 
@@ -201,9 +300,10 @@ def main(argv: list[str] | None = None) -> int:
             slugs = [backend["slug"] for backend in released_backends()]
             sys.stdout.write(json.dumps({"slug": slugs}, separators=(",", ":")))
             sys.stdout.write("\n")
-        else:
+        elif args.command == "catalog":
             catalog = build_registration_catalog(
                 release_ref=args.release_ref,
+                stage=args.stage,
                 image_by_slug=parse_image_assignments(args.image),
                 selected_slugs=args.slug,
             )
@@ -212,6 +312,23 @@ def main(argv: list[str] | None = None) -> int:
                 sys.stdout.write(base64.b64encode(raw).decode("ascii"))
             else:
                 sys.stdout.write(raw.decode("utf-8"))
+            sys.stdout.write("\n")
+        else:
+            _backend, manifest_yaml = tagged_manifest(
+                release_ref=args.release_ref,
+                slug=args.slug,
+            )
+            version = manifest_version(manifest_yaml)
+            if args.command == "job-name":
+                sys.stdout.write(
+                    cloud_run_job_name(
+                        slug=args.slug,
+                        version=version,
+                        stage=args.stage,
+                    ),
+                )
+            else:
+                sys.stdout.write(version)
             sys.stdout.write("\n")
     except (ValueError, subprocess.CalledProcessError) as exc:
         print(f"error: {exc}", file=sys.stderr)

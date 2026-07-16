@@ -145,6 +145,7 @@ def _assert_image_contract(slug: str, image: str) -> None:
             )
     for name in (
         "io.purelms.interactive-task.version",
+        "io.purelms.shared-contract.version",
         "org.opencontainers.image.revision",
         "org.opencontainers.image.version",
     ):

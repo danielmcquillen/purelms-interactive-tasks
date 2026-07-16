@@ -44,8 +44,8 @@ _check-slug slug:
 
 # Stage a local purelms-shared wheel into <slug>/backend/_vendor/
 # so development container builds exercise the sibling checkout. Release CI
-# stages only the in-repo runtime wheel and resolves purelms-shared from PyPI,
-# proving that published consumers do not depend on the workspace layout.
+# stages only the in-repo runtime wheel and resolves purelms-shared from PyPI.
+# Both paths constrain external packages to the checked-in uv.lock versions.
 #
 # Path is the sibling repo per workspace convention. Override with
 # PURELMS_SHARED_PATH if checked out elsewhere.
@@ -60,6 +60,9 @@ _stage-shared-wheel slug shared_path=env_var_or_default("PURELMS_SHARED_PATH", "
     # which pulls the purelms-shared wheel staged above plus google-auth
     # for callback OIDC tokens. Object I/O uses signed HTTPS URLs.
     cd "{{ justfile_directory() }}/_shared_backends/purelms_itask_runtime" && uv build --wheel --out-dir "{{ justfile_directory() }}/{{ slug }}/backend/_vendor"
+    uv export --frozen --no-dev --all-packages --extra cloud \
+        --no-emit-workspace --no-hashes --no-annotate --no-header \
+        --output-file "{{ slug }}/backend/_vendor/constraints.txt"
 
 # Build the container image for one InteractiveTask.
 # Image name derives from slug by s/_/-/g.
@@ -191,10 +194,14 @@ deploy slug stage image_tag="": (_check-slug slug)
         exit 1
     fi
 
-    SUFFIX=$(if [ "{{ stage }}" = "prod" ]; then printf ''; else printf '%s' '-{{ stage }}'; fi)
     IMAGE_SLUG=$(printf '%s' "{{ slug }}" | tr '_' '-')
     IMAGE="${PURELMS_IMAGE_BASE}/purelms-itask-${IMAGE_SLUG}"
-    JOB_NAME="purelms-itask-${IMAGE_SLUG}${SUFFIX}"
+    JOB_NAME=$(python3 scripts/backend_inventory.py job-name \
+        --release-ref "${TAG}" --slug "{{ slug }}" --stage "{{ stage }}")
+    TASK_VERSION=$(python3 scripts/backend_inventory.py task-version \
+        --release-ref "${TAG}" --slug "{{ slug }}")
+    TASK_VERSION_LABEL=$(printf '%s' "${TASK_VERSION}" | tr '.' '-')
+    RELEASE_LABEL=$(printf '%s' "${TAG}" | tr '.' '-')
     MAIN_SA="purelms-cloudrun-{{ stage }}@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
     BACKEND_SA_NAME="purelms-sim-{{ stage }}"
     BACKEND_SA="${BACKEND_SA_NAME}@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
@@ -211,6 +218,28 @@ deploy slug stage image_tag="": (_check-slug slug)
         exit 1
     fi
     PINNED_IMAGE="${IMAGE}@${DIGEST}"
+
+    # A versioned Job is part of the release record. Re-running deployment may
+    # refresh configuration and IAM, but it must never point that identity at
+    # different bytes. A changed digest requires a new task manifest version.
+    EXISTING_JOB=$(gcloud run jobs list \
+        --region="${GCP_REGION}" \
+        --project="${GCP_PROJECT_ID}" \
+        --filter="metadata.name=${JOB_NAME}" \
+        --format='value(metadata.name)' | head -1)
+    if [ "${EXISTING_JOB}" = "${JOB_NAME}" ]; then
+        EXISTING_IMAGE=$(gcloud run jobs describe "${JOB_NAME}" \
+            --region="${GCP_REGION}" \
+            --project="${GCP_PROJECT_ID}" \
+            --format='value(spec.template.spec.template.spec.containers[0].image)')
+        if [ "${EXISTING_IMAGE}" != "${PINNED_IMAGE}" ]; then
+            echo "✗ Refusing to rewrite immutable Job ${JOB_NAME}."
+            echo "  deployed: ${EXISTING_IMAGE:-<empty>}"
+            echo "  requested: ${PINNED_IMAGE}"
+            echo "  Bump the task manifest version and publish a new release."
+            exit 1
+        fi
+    fi
 
     if ! gcloud iam service-accounts describe "${BACKEND_SA}" \
         --project="${GCP_PROJECT_ID}" >/dev/null 2>&1; then
@@ -239,7 +268,7 @@ deploy slug stage image_tag="": (_check-slug slug)
         --memory=2Gi \
         --max-retries=0 \
         --task-timeout=1800s \
-        --labels="managed-by=purelms,backend=${IMAGE_SLUG},stage={{ stage }}" \
+        --labels="managed-by=purelms,backend=${IMAGE_SLUG},task-version=${TASK_VERSION_LABEL},release=${RELEASE_LABEL},stage={{ stage }}" \
         --quiet
 
     echo "Granting ${MAIN_SA} permission to execute and inspect ${JOB_NAME}..."
@@ -306,8 +335,8 @@ deploy-all stage image_tag="":
         just deploy "${slug}" "{{ stage }}" "{{ image_tag }}"
     done
 
-# Describe a deployed Job without executing it.
-status slug stage="prod": (_check-slug slug)
+# Describe one exact tagged task Job without executing it.
+status slug stage="prod" image_tag="": (_check-slug slug)
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ ! "{{ stage }}" =~ ^(dev|staging|prod)$ ]]; then
@@ -316,9 +345,12 @@ status slug stage="prod": (_check-slug slug)
     fi
     : "${GCP_PROJECT_ID:?Source the PureLMS GCP .just file first}"
     : "${GCP_REGION:?Source the PureLMS GCP .just file first}"
-    SUFFIX=$(if [ "{{ stage }}" = "prod" ]; then printf ''; else printf '%s' '-{{ stage }}'; fi)
-    IMAGE_SLUG=$(printf '%s' "{{ slug }}" | tr '_' '-')
-    gcloud run jobs describe "purelms-itask-${IMAGE_SLUG}${SUFFIX}" \
+    VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -1)
+    TAG="{{ image_tag }}"
+    TAG="${TAG:-v${VERSION}}"
+    JOB_NAME=$(python3 scripts/backend_inventory.py job-name \
+        --release-ref "${TAG}" --slug "{{ slug }}" --stage "{{ stage }}")
+    gcloud run jobs describe "${JOB_NAME}" \
         --region="${GCP_REGION}" \
         --project="${GCP_PROJECT_ID}"
 
@@ -586,11 +618,11 @@ release VERSION:
     # Fail before creating a signed tag if an immutable manifest asset has
     # drifted or an embedded native binary cannot execute on Cloud Run.
     python3 scripts/validate_release_assets.py
+    python3 scripts/validate_release_versions.py --release-ref HEAD
 
-    # purelms-shared freshness — informational. The backends pin a floor
-    # (purelms-shared>=X) and the image resolves the latest at build time,
-    # so a behind floor doesn't break the build; this just flags it in case
-    # you meant to raise it. Never blocks.
+    # purelms-shared freshness — informational. Release images resolve the
+    # declared contract floor exactly, so this only flags a newer compatible
+    # library that may justify an intentional floor and task-version bump.
     SHARED_FLOOR=$(grep -E '"purelms-shared>=' pyproject.toml | head -1 | sed -E 's/.*"purelms-shared>=([^",]+)".*/\1/' || true)
     if [[ -n "${SHARED_FLOOR:-}" ]]; then
         SHARED_LATEST=$(curl -s --max-time 10 https://pypi.org/pypi/purelms-shared/json 2>/dev/null | jq -r '.info.version' 2>/dev/null || true)

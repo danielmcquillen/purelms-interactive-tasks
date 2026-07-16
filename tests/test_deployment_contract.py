@@ -8,13 +8,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import tomllib
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.backend_inventory import build_registration_catalog  # noqa: E402
+from scripts.backend_inventory import cloud_run_job_name  # noqa: E402
+from scripts.backend_inventory import manifest_version  # noqa: E402
 from scripts.validate_release_assets import validate_release_assets  # noqa: E402
+from scripts.validate_release_versions import release_inputs_by_slug  # noqa: E402
+from scripts.validate_release_versions import semver_key  # noqa: E402
 
 JUSTFILE = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
 RELEASE_WORKFLOW = (REPO_ROOT / ".github/workflows/release.yml").read_text(
@@ -90,6 +95,7 @@ def test_registration_catalog_uses_tagged_inventory_and_manifests() -> None:
 
     catalog = build_registration_catalog(
         release_ref="HEAD",
+        stage="prod",
         image_by_slug=images,
     )
 
@@ -107,6 +113,86 @@ def test_registration_catalog_uses_tagged_inventory_and_manifests() -> None:
             text=True,
         ).stdout
         assert entry["manifest_yaml"] == tagged_manifest
+        assert entry["cloud_run_job_name"] == cloud_run_job_name(
+            slug=backend["slug"],
+            version=manifest_version(tagged_manifest),
+            stage="prod",
+        )
+
+
+def test_cloud_run_job_names_pin_task_version_and_compact_stage() -> None:
+    """A Job identity names the exact task release and deployment stage."""
+    assert (
+        cloud_run_job_name(slug="echo", version="0.1.0", stage="prod")
+        == "purelms-itask-echo-v0-1-0"
+    )
+    assert (
+        cloud_run_job_name(
+            slug="energyplus_single_zone",
+            version="0.2.3",
+            stage="staging",
+        )
+        == "purelms-itask-energyplus-single-zone-v0-2-3-stg"
+    )
+
+
+def test_long_cloud_run_job_names_are_bounded_and_collision_safe() -> None:
+    """Long slugs keep readable prefixes but distinct releases never collide."""
+    slug = "a_very_long_interactive_task_backend_slug_that_exceeds_the_limit"
+    first = cloud_run_job_name(slug=slug, version="1.2.3", stage="staging")
+    second = cloud_run_job_name(slug=slug, version="1.2.4", stage="staging")
+
+    assert len(first) <= 49
+    assert first.startswith("purelms-itask-a-very-long")
+    assert first.endswith("-v1-2-3-stg")
+    assert first != second
+
+
+@pytest.mark.parametrize(
+    ("slug", "version"),
+    [("Bad Slug", "1.2.3"), ("echo", "1.2"), ("echo", "v1.2.3")],
+)
+def test_cloud_run_job_names_reject_non_release_identity(
+    slug: str,
+    version: str,
+) -> None:
+    """Only canonical backend slugs and release SemVer may reach Cloud Run."""
+    with pytest.raises(
+        ValueError,
+        match=r"invalid backend slug|backend version must",
+    ):
+        cloud_run_job_name(slug=slug, version=version, stage="prod")
+
+
+def test_release_version_gate_scopes_task_and_shared_runtime_changes() -> None:
+    """Aggregate and shared inputs bump every task; tests and prose do not."""
+    affected = release_inputs_by_slug(
+        {
+            "pyproject.toml",
+            "echo/backend/main.py",
+            "energyplus_single_zone/backend/tests/test_main.py",
+            "modelica_diagram/README.md",
+            "_shared_backends/purelms_itask_runtime/src/runtime.py",
+        },
+        {"echo", "energyplus_single_zone", "modelica_diagram"},
+    )
+
+    assert "echo/backend/main.py" in affected["echo"]
+    assert all(
+        "_shared_backends/purelms_itask_runtime/src/runtime.py" in paths
+        for paths in affected.values()
+    )
+    assert all("pyproject.toml" in paths for paths in affected.values())
+    assert not any(
+        "tests/test_main.py" in path for path in affected["energyplus_single_zone"]
+    )
+    assert not any("README.md" in path for path in affected["modelica_diagram"])
+
+
+def test_release_version_gate_orders_task_versions_numerically() -> None:
+    """Release gates reject equal or regressed versions without lexical traps."""
+    assert semver_key("0.10.0") > semver_key("0.9.9")
+    assert semver_key("1.0.0") > semver_key("0.99.99")
 
 
 def test_backend_inventory_paths_and_contracts() -> None:
@@ -153,14 +239,25 @@ def test_backend_metadata_and_image_labels_match_task_version() -> None:
 
         assert f'BACKEND_VERSION = "{version}"' in metadata
         assert f'ARG PURELMS_TASK_VERSION="{version}"' in dockerfile
+        assert (
+            f'ARG PURELMS_SHARED_VERSION="{backend["shared_contract_floor"]}"'
+            in dockerfile
+        )
+        assert "--constraint" in dockerfile
         for label in (
             "org.opencontainers.image.version",
             "org.opencontainers.image.revision",
             "org.opencontainers.image.source",
             "io.purelms.interactive-task.slug",
             "io.purelms.interactive-task.version",
+            "io.purelms.shared-contract.version",
         ):
             assert label in dockerfile
+
+    assert "PURELMS_SHARED_VERSION=${{ matrix.shared_contract_floor }}" in (
+        RELEASE_WORKFLOW
+    )
+    assert "uv export --frozen" in RELEASE_WORKFLOW
 
 
 def test_backend_build_contexts_exclude_credentials_and_local_noise() -> None:
@@ -317,12 +414,18 @@ def test_release_assets_match_manifests_and_cloud_run_architecture() -> None:
     assert validate_release_assets() == []
 
 
-def test_release_workflow_validates_assets_before_creating_release() -> None:
-    """A bad native asset must fail before GitHub creates the release record."""
-    validation = RELEASE_WORKFLOW.index("python3 scripts/validate_release_assets.py")
+def test_release_workflow_validates_assets_and_versions_before_release() -> None:
+    """Bad native assets or stale task versions fail before publication."""
+    asset_validation = RELEASE_WORKFLOW.index(
+        "python3 scripts/validate_release_assets.py",
+    )
+    version_validation = RELEASE_WORKFLOW.index(
+        "python3 scripts/validate_release_versions.py",
+    )
     release = RELEASE_WORKFLOW.index("gh release create")
 
-    assert validation < release
+    assert asset_validation < release
+    assert version_validation < release
 
 
 def test_deploy_resolves_tag_and_pins_job_to_digest() -> None:
@@ -340,7 +443,8 @@ def test_deploy_preserves_stage_and_identity_boundaries() -> None:
     """Stages get distinct Jobs and containers run outside the Django identity."""
     recipe = _recipe("deploy", "deploy-all")
 
-    assert 'JOB_NAME="purelms-itask-${IMAGE_SLUG}${SUFFIX}"' in recipe
+    assert "scripts/backend_inventory.py job-name" in recipe
+    assert "JOB_NAME=$(python3 scripts/backend_inventory.py job-name" in recipe
     assert 'BACKEND_SA_NAME="purelms-sim-{{ stage }}"' in recipe
     assert 'MAIN_SA="purelms-cloudrun-{{ stage }}@' in recipe
     assert "roles/storage.objectUser" in recipe
@@ -351,6 +455,16 @@ def test_deploy_preserves_stage_and_identity_boundaries() -> None:
     assert "gcloud run services get-iam-policy" in recipe
     assert 'if [ "${CONFIGURED_CALLBACK_SA}" != "${BACKEND_SA}" ]' in recipe
     assert "TASK_OIDC_ALLOWED_SERVICE_ACCOUNTS=" not in recipe
+
+
+def test_deploy_refuses_to_repoint_an_existing_versioned_job() -> None:
+    """A task-version Job cannot be silently changed to different image bytes."""
+    recipe = _recipe("deploy", "deploy-all")
+
+    assert 'if [ "${EXISTING_IMAGE}" != "${PINNED_IMAGE}" ]; then' in recipe
+    assert "Refusing to rewrite immutable Job" in recipe
+    assert "task-version=${TASK_VERSION_LABEL}" in recipe
+    assert "release=${RELEASE_LABEL}" in recipe
 
 
 def test_deploy_retries_new_service_account_propagation() -> None:

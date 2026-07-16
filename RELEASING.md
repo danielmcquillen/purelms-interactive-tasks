@@ -29,9 +29,16 @@ For each backend slug (`echo`, `energyplus_single_zone`,
 4. **Validated immutable assets.** CI verifies every manifest asset hash and
    rejects FMUs whose embedded Linux binaries are not x86-64 before creating
    the GitHub Release.
-5. **Operator-readable OCI identity.** Every image records its repository
+5. **Version-honest task identities.** CI compares release inputs with the
+   preceding tag. This is an aggregate release: every image receives the new
+   repository release label, so every released task's manifest version must
+   increase. This keeps each versioned Cloud Run Job bound to one digest.
+6. **Operator-readable OCI identity.** Every image records its repository
    release version, source revision, source repository, backend slug, and
-   manifest task version. The digest remains the cryptographic identity.
+   manifest task version. The inventory's shared-contract floor is installed
+   exactly and recorded too, so rebuilding the tag cannot silently select a
+   newer library. All external Python packages are constrained by the signed
+   tag's `uv.lock`. The digest remains the cryptographic identity.
 
 The two provenance layers stack: the signed tag gates the CI run that
 produces the attestation, so a verified attestation implies a verified
@@ -127,23 +134,24 @@ cleanly.
    EnergyPlus binary and Modelica FMU as `linux/amd64`, including under Docker
    emulation on Apple Silicon.
    It also verifies the loaded image architecture and required OCI labels.
-2. Bump `version` in `pyproject.toml`, refresh `uv.lock`, commit, and push to
-   `main`.
+2. Bump `version` in `pyproject.toml`. Also bump every released task's manifest,
+   `backend/__metadata__.py`, and Dockerfile `PURELMS_TASK_VERSION`; refresh
+   `uv.lock`, commit, and push to `main`.
 3. Run:
    ```bash
-   just release 0.2.1
+   just release 0.2.3
    ```
    It checks the tree is clean, on `main`, in sync with origin, and that
    the version matches `pyproject.toml`. It also validates immutable asset
-   hashes and native architectures, then signs and pushes `v0.2.1`. CI repeats
-   the asset check before creating the release.
+   hashes, native architectures, and task-version changes, then signs and
+   pushes `v0.2.3`. CI repeats the checks before creating the release.
 4. Watch it: `gh run watch`.
 
 ## Verifying a release before you deploy
 
 ```bash
 # Resolve the digest (install crane if needed).
-DIGEST=$(crane digest ghcr.io/<your-org>/purelms-itask-energyplus-single-zone:v0.2.1)
+DIGEST=$(crane digest ghcr.io/<your-org>/purelms-itask-energyplus-single-zone:v0.2.3)
 
 # Verify the sigstore attestation against the digest — confirms the image
 # was built by THIS repo's GitHub Actions, signed via OIDC.

@@ -115,6 +115,11 @@ jobs:
       - name: Validate release assets and native architectures
         run: python3 scripts/validate_release_assets.py
 
+      - name: Validate repository and task versions
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: python3 scripts/validate_release_versions.py --release-ref "$RELEASE_TAG"
+
       - name: Load released backends from the authoritative inventory
         id: backend-matrix
         run: echo "matrix=$(python3 scripts/backend_inventory.py matrix)" >> "$GITHUB_OUTPUT"
@@ -165,10 +170,10 @@ jobs:
 
       # Stage the vendored wheel the Dockerfile expects at
       # ``<slug>/backend/_vendor/``. Only the in-repo ``purelms-itask-runtime``
-      # wheel is built here; ``purelms-shared`` is on PyPI and the
-      # Dockerfile's ``pip --find-links`` install (no ``--no-index``)
-      # resolves it from there. This mirrors ``just _stage-shared-wheel``
-      # minus the sibling-repo build, since CI has PyPI.
+      # wheel is built here; ``purelms-shared`` is on PyPI. The exported
+      # constraints make every external Python dependency come from the
+      # signed tag's uv.lock. This mirrors ``just _stage-shared-wheel`` minus
+      # the sibling-repo build, since CI has PyPI.
       - name: Stage the shared runtime wheel
         env:
           SLUG: ${{ matrix.slug }}
@@ -176,6 +181,9 @@ jobs:
           mkdir -p "${SLUG}/backend/_vendor"
           uv build --wheel _shared_backends/purelms_itask_runtime \
             --out-dir "${SLUG}/backend/_vendor"
+          uv export --frozen --no-dev --all-packages --extra cloud \
+            --no-emit-workspace --no-hashes --no-annotate --no-header \
+            --output-file "${SLUG}/backend/_vendor/constraints.txt"
 
       # ── Primary registry: GHCR (always pushed) ────────────────────────
       - name: Log in to GHCR
@@ -222,6 +230,7 @@ jobs:
             PURELMS_IMAGE_REVISION=${{ github.sha }}
             PURELMS_IMAGE_SOURCE=https://github.com/${{ github.repository }}
             PURELMS_BACKEND_SLUG=${{ matrix.slug }}
+            PURELMS_SHARED_VERSION=${{ matrix.shared_contract_floor }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
           provenance: mode=max
