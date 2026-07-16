@@ -347,7 +347,10 @@ def test_deploy_preserves_stage_and_identity_boundaries() -> None:
     assert "roles/run.invoker" in recipe
     assert "roles/run.jobsExecutorWithOverrides" in recipe
     assert "roles/run.viewer" in recipe
-    assert "TASK_OIDC_ALLOWED_SERVICE_ACCOUNTS=" in recipe
+    assert "SIMULATION_CALLBACK_SERVICE_ACCOUNT" in recipe
+    assert "gcloud run services get-iam-policy" in recipe
+    assert 'if [ "${CONFIGURED_CALLBACK_SA}" != "${BACKEND_SA}" ]' in recipe
+    assert "TASK_OIDC_ALLOWED_SERVICE_ACCOUNTS=" not in recipe
 
 
 def test_deploy_retries_new_service_account_propagation() -> None:

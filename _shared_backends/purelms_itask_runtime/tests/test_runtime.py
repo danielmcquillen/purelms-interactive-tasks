@@ -23,8 +23,8 @@ from purelms_shared.envelopes import SimulationInputEnvelope
 from purelms_shared.envelopes import SimulationOutputEnvelope
 
 _FILE_SENTINEL = "file:///dev/null"
-_PROGRESS_URL = "https://worker.example/api/internal/sim/runs/abc/progress"
-_COMPLETE_URL = "https://worker.example/api/internal/sim/runs/abc/complete"
+_PROGRESS_URL = "https://worker.example/api/v1/sims/internal/runs/abc/progress"
+_COMPLETE_URL = "https://worker.example/api/v1/sims/internal/runs/abc/complete"
 _AUDIENCE = "https://worker.example"
 
 
@@ -249,7 +249,7 @@ def test_write_output_gcs_uploads_and_posts_complete(monkeypatch):
     assert len(uploads) == 1
     assert uploads[0][0] == output_uri
     assert b'"status"' in uploads[0][1]
-    # ...and POSTed the authoritative complete callback carrying that URI.
+    # ...and POSTed the required completion notification carrying that URI.
     assert len(posts) == 1
     url, audience, body = posts[0]
     assert url == _COMPLETE_URL
@@ -269,7 +269,7 @@ def test_complete_callback_noops_on_file_sentinel(monkeypatch):
 
 
 # ---------------------------------------------------------------------
-# Completion delivery is authoritative — retry then raise (P1 review)
+# Completion delivery is required for the prompt path — retry then raise
 # ---------------------------------------------------------------------
 
 
@@ -313,6 +313,46 @@ def test_complete_callback_succeeds_on_retry(monkeypatch):
     assert calls["n"] == 2  # failed once, succeeded on the retry
 
 
+def test_complete_callback_refreshes_oidc_token_on_retry(monkeypatch):
+    """Each delivery attempt mints a fresh token instead of reusing a stale one."""
+    tokens: list[str] = []
+    auth_headers: list[str | None] = []
+
+    def _fetch(_audience):
+        token = f"token-{len(tokens) + 1}"
+        tokens.append(token)
+        return token
+
+    class _Response:
+        """Minimal successful urllib response context manager."""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b""
+
+    def _urlopen(request, *, timeout):
+        assert timeout == rt._CALLBACK_TIMEOUT_SECONDS
+        auth_headers.append(request.get_header("Authorization"))
+        if len(auth_headers) == 1:
+            raise TimeoutError
+        return _Response()
+
+    monkeypatch.setattr(rt, "_fetch_id_token", _fetch)
+    monkeypatch.setattr(rt.urllib.request, "urlopen", _urlopen)
+    monkeypatch.setattr(rt.time, "sleep", lambda _s: None)
+
+    ctx = _context(progress_url=_PROGRESS_URL, complete_url=_COMPLETE_URL)
+    rt._post_complete(ctx, output_envelope_uri="gs://b/o.json", exit_code=0)
+
+    assert tokens == ["token-1", "token-2"]
+    assert auth_headers == ["Bearer token-1", "Bearer token-2"]
+
+
 def test_write_output_gcs_raises_when_complete_undeliverable(monkeypatch):
     """The envelope is uploaded, but an undeliverable /complete propagates
     as CompleteCallbackError (so the backend exits non-zero)."""
@@ -330,6 +370,34 @@ def test_write_output_gcs_raises_when_complete_undeliverable(monkeypatch):
     )
     with pytest.raises(rt.CompleteCallbackError):
         write_output_envelope(loc, _output_envelope(uuid4()), ctx)
+
+
+def test_http_callback_refuses_anonymous_fallback(monkeypatch):
+    """A token-mint failure must stop before any unauthenticated POST."""
+    posts: list[object] = []
+    monkeypatch.setattr(
+        rt,
+        "_fetch_id_token",
+        lambda _audience: (_ for _ in ()).throw(
+            rt.CallbackAuthenticationError("metadata unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        rt.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: posts.append(object()),
+    )
+
+    with pytest.raises(rt.CallbackAuthenticationError, match="metadata unavailable"):
+        rt._post_json(_COMPLETE_URL, _AUDIENCE, "{}")
+
+    assert posts == []
+
+
+def test_empty_callback_audience_fails_closed():
+    """A missing audience cannot silently become an anonymous callback."""
+    with pytest.raises(rt.CallbackAuthenticationError, match="audience is empty"):
+        rt._fetch_id_token("")
 
 
 def test_read_input_rejects_hash_mismatch(tmp_path):

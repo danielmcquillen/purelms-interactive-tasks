@@ -39,7 +39,7 @@ def main() -> int:
     3. **Output write.** The output envelope MUST be written before
        exit 0 (to ``PURELMS_OUTPUT_URI`` on the async path, else
        ``PURELMS_OUTPUT_DIR/output.json``). On the async path the helper
-       also POSTs the authoritative ``/complete`` callback.
+       also POSTs the required ``/complete`` notification.
     """
     location = RuntimeLocation.from_env()
     started_at = time.monotonic()

@@ -22,10 +22,10 @@ This module hides that split behind three calls so a backend's
    that POSTs :class:`~purelms_shared.callbacks.ProgressCallback` to the
    worker, or ``None`` when there's no real endpoint (local/sync).
 3. :func:`write_output_envelope` — GCS upload (URI mode) or local write,
-   then — async only — POSTs the authoritative
-   :class:`~purelms_shared.callbacks.CompleteCallback` so the worker
-   finalizes the run. On the local path the worker reads the file
-   directly, so no callback is sent.
+   then — async only — POSTs a required
+   :class:`~purelms_shared.callbacks.CompleteCallback` notification so the
+   worker promptly finalizes the run from the authoritative output envelope.
+   On the local path the worker reads the file directly, so no callback is sent.
 
 The mode is read from the environment's *shape* (which env vars are set,
 whether the callback URL is ``http(s)`` vs the ``file://`` sentinel) — a
@@ -64,7 +64,7 @@ _HTTP_PREFIXES = ("http://", "https://")
 # Worker callbacks are tiny JSON POSTs; a short timeout keeps a flaky
 # endpoint from stalling the container's exit.
 _CALLBACK_TIMEOUT_SECONDS = 10
-# The completion callback is authoritative — retry it before giving up.
+# Completion notification is required for the prompt path; retry before giving up.
 # Backoff is 1, 2, 4, 8s between 5 attempts (~15s total worst case).
 _COMPLETE_MAX_ATTEMPTS = 5
 _COMPLETE_BACKOFF_BASE_SECONDS = 1.0
@@ -82,12 +82,21 @@ class ObjectIdentity:
 
 
 class CompleteCallbackError(RuntimeError):
-    """The authoritative ``/complete`` callback could not be delivered.
+    """The required ``/complete`` notification could not be delivered.
 
     Raised after exhausting retries. The output envelope is already in
     GCS, so the run is recoverable: the worker's sweeper finalizes it
     from ``run.output_envelope_uri``. The backend should let this
     propagate (exit non-zero) rather than swallow it.
+    """
+
+
+class CallbackAuthenticationError(RuntimeError):
+    """The backend could not mint the OIDC token required by the worker.
+
+    HTTP callbacks never fall back to anonymous requests. Progress reporting
+    logs this as non-fatal; completion delivery retries and then raises its
+    normal :class:`CompleteCallbackError` with this exception as the cause.
     """
 
 
@@ -258,9 +267,9 @@ def write_output_envelope(
 ) -> None:
     """Write the output envelope, then signal completion on the async path.
 
-    URI mode: upload ``output.json`` to ``PURELMS_OUTPUT_URI`` and POST the
-    authoritative :class:`CompleteCallback` (carrying that ``gs://`` URI)
-    so the worker reads + finalizes the run. Dir mode: write
+    URI mode: upload the authoritative ``output.json`` to
+    ``PURELMS_OUTPUT_URI`` and POST :class:`CompleteCallback` (carrying that
+    ``gs://`` URI) so the worker promptly reads + finalizes the run. Dir mode: write
     ``PURELMS_OUTPUT_DIR/output.json``; the worker observes the file
     directly, so no callback is sent (the envelope's
     ``callback_url_complete`` is the ``file:///dev/null`` sentinel and
@@ -347,7 +356,7 @@ def make_progress_reporter(
 
 
 # ---------------------------------------------------------------------
-# Worker callback HTTP client (OIDC-authed when google-auth is present)
+# Worker callback HTTP client (OIDC authentication is mandatory)
 # ---------------------------------------------------------------------
 
 
@@ -358,13 +367,13 @@ def _post_complete(
     exit_code: int,
     identity: ObjectIdentity | None = None,
 ) -> None:
-    """POST the authoritative completion callback — async path only.
+    """POST the required completion notification — async path only.
 
     No-ops when ``callback_url_complete`` isn't an ``http(s)`` URL (the
     local/sync ``file:///dev/null`` sentinel): there, the worker reads the
     written envelope off disk.
 
-    Unlike progress, completion is **authoritative + not best-effort**: a
+    Unlike progress, completion notification is **not best-effort**: a
     successful run whose ``/complete`` is dropped would otherwise be swept
     to FAILED_RUNTIME + refunded despite a perfectly good ``output.json``
     sitting in GCS. So we retry with exponential backoff and, if it still
@@ -409,11 +418,12 @@ def _post_complete(
 
 
 def _post_json(url: str, audience: str, json_body: str) -> None:
-    """POST a JSON body to a worker endpoint, OIDC-authed when possible."""
-    headers = {"Content-Type": "application/json"}
+    """POST JSON to the worker with a mandatory Google OIDC identity token."""
     token = _fetch_id_token(audience)
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
     request = urllib.request.Request(
         url,
         data=json_body.encode("utf-8"),
@@ -427,22 +437,25 @@ def _post_json(url: str, audience: str, json_body: str) -> None:
         response.read()
 
 
-def _fetch_id_token(audience: str) -> str | None:
-    """Mint a Google OIDC ID token for ``audience``; ``None`` if unavailable.
-
-    Guarded so the local/dev paths (no ``google-auth`` installed, no
-    metadata server) degrade to an unauthenticated POST rather than
-    crashing — the worker rejects it, which the caller logs harmlessly.
-    """
+def _fetch_id_token(audience: str) -> str:
+    """Mint the required Google OIDC token or raise an actionable error."""
+    if not audience.strip():
+        msg = "callback audience is empty; refusing an unauthenticated request"
+        raise CallbackAuthenticationError(msg)
     try:
-        # Lazy + guarded: ``google-auth`` is in the ``cloud`` extra,
-        # present only on the async/Cloud Run image.
+        # Lazy import: ``google-auth`` is in the cloud image only. HTTP
+        # callbacks are also cloud-only, so absence is a deployment failure.
         from google.auth.transport import requests as ga_requests  # noqa: PLC0415
         from google.oauth2 import id_token  # noqa: PLC0415
 
-        return id_token.fetch_id_token(ga_requests.Request(), audience)
-    except Exception:
-        return None
+        token = id_token.fetch_id_token(ga_requests.Request(), audience)
+    except Exception as exc:
+        msg = f"could not mint callback OIDC token for audience {audience!r}: {exc}"
+        raise CallbackAuthenticationError(msg) from exc
+    if not token:
+        msg = f"Google returned an empty callback OIDC token for {audience!r}"
+        raise CallbackAuthenticationError(msg)
+    return token
 
 
 # ---------------------------------------------------------------------

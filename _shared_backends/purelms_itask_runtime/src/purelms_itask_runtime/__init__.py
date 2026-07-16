@@ -9,6 +9,7 @@ worker-callback contract behind three calls, so every backend's
 
 from __future__ import annotations
 
+from purelms_itask_runtime.runtime import CallbackAuthenticationError
 from purelms_itask_runtime.runtime import CompleteCallbackError
 from purelms_itask_runtime.runtime import RuntimeConfigError
 from purelms_itask_runtime.runtime import RuntimeLocation
@@ -17,6 +18,7 @@ from purelms_itask_runtime.runtime import read_input_envelope
 from purelms_itask_runtime.runtime import write_output_envelope
 
 __all__ = [
+    "CallbackAuthenticationError",
     "CompleteCallbackError",
     "RuntimeConfigError",
     "RuntimeLocation",

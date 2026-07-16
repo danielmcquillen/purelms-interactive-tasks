@@ -172,6 +172,14 @@ async function handleSubmit(state: SubmitState): Promise<void> {
     })) {
       statusEl.textContent = `Run ${status.id}: ${status.status} (${status.progress_pct}%)`;
       if (status.is_terminal) {
+        const learnerError = (status.messages ?? []).find(
+          (message) => message.level === "error",
+        );
+        if (learnerError !== undefined) {
+          statusEl.textContent = learnerError.text;
+          statusEl.classList.remove("text-muted");
+          statusEl.classList.add("text-danger");
+        }
         renderTerminalResult(resultEl, status);
         break;
       }

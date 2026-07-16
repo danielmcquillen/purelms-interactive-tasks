@@ -131,6 +131,45 @@ describe("echo mount()", () => {
     expect(result?.textContent).toContain("abc-123");
   });
 
+  it("shows the learner-safe message when a run fails at runtime", async () => {
+    const { helpers } = makeHelpers({
+      submitOutcome: {
+        attempt: null,
+        run: {
+          id: "failed-123",
+          status: "running",
+          status_url: "/api/v1/sims/runs/failed-123/status",
+          poll_interval_seconds: 0,
+        },
+        is_complete: false,
+      },
+      pollStatuses: [
+        {
+          id: "failed-123",
+          status: "failed_runtime",
+          progress_pct: 0,
+          is_terminal: true,
+          messages: [
+            {
+              level: "error",
+              code: "simulation_platform_error",
+              text: "We couldn't complete this simulation. Please try again.",
+            },
+          ],
+          outputs: {},
+        },
+      ],
+    });
+    await mount(host, {}, helpers as never);
+
+    host.querySelector<HTMLFormElement>("form")!.requestSubmit();
+    await new Promise((r) => setTimeout(r, 10));
+
+    const status = host.querySelector(".purelms-echo-task .small");
+    expect(status?.textContent).toContain("Please try again");
+    expect(status?.textContent).not.toContain("failed_runtime");
+  });
+
   it("surfaces submit errors", async () => {
     const helpers = {
       api: {

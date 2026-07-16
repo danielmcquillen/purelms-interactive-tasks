@@ -134,10 +134,13 @@ revision, source repository, backend slug, and InteractiveTask manifest
 version. These labels support operator inventory; the immutable image digest
 remains the deployment and provenance trust root.
 
-The recipe prints the exact `TASK_OIDC_ALLOWED_SERVICE_ACCOUNTS` line required
-by Django. Apply that line to the stage's user-owned `.django` file and run
-`just gcp deploy-config <stage>` before the first live simulation. The tracked
-example in PureLMS's `.envs.example/` directory documents the same setting.
+The PureLMS worker deploy stamps the deterministic
+`SIMULATION_CALLBACK_SERVICE_ACCOUNT` for its stage. Backend deployment verifies
+both the worker's `roles/run.invoker` IAM binding and that Django-facing value;
+it fails with an instruction to deploy the current worker if the two sides do
+not agree. No callback allowlist edit in the secret file is required. The
+runtime mints a fresh OIDC token for every delivery attempt and refuses to send
+an anonymous callback if token minting fails.
 
 For a deliberate local publish (development or recovery), `just publish
 <slug>` builds linux/amd64 and pushes only the immutable `vX.Y.Z` tag. It does

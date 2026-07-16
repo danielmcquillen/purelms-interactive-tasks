@@ -253,19 +253,39 @@ deploy slug stage image_tag="": (_check-slug slug)
     done
 
     echo "Granting ${BACKEND_SA} callback access to ${WORKER_SERVICE}..."
-    gcloud run services add-iam-policy-binding "${WORKER_SERVICE}" \
+    retry_gcloud gcloud run services add-iam-policy-binding "${WORKER_SERVICE}" \
         --region="${GCP_REGION}" \
         --project="${GCP_PROJECT_ID}" \
         --member="serviceAccount:${BACKEND_SA}" \
         --role="roles/run.invoker" \
         --quiet >/dev/null
 
+    echo "Verifying callback authorization at Cloud Run and Django boundaries..."
+    INVOKER_ROLE=$(gcloud run services get-iam-policy "${WORKER_SERVICE}" \
+        --region="${GCP_REGION}" \
+        --project="${GCP_PROJECT_ID}" \
+        --flatten="bindings[].members" \
+        --filter="bindings.role=roles/run.invoker AND bindings.members=serviceAccount:${BACKEND_SA}" \
+        --format="value(bindings.role)")
+    if [ "${INVOKER_ROLE}" != "roles/run.invoker" ]; then
+        echo "✗ ${BACKEND_SA} is missing roles/run.invoker on ${WORKER_SERVICE}."
+        exit 1
+    fi
+
+    CONFIGURED_CALLBACK_SA=$(gcloud run services describe "${WORKER_SERVICE}" \
+        --region="${GCP_REGION}" \
+        --project="${GCP_PROJECT_ID}" \
+        --format=json | python3 -c 'import json, sys; doc=json.load(sys.stdin); env=doc.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [{}])[0].get("env", []); print(next((item.get("value", "") for item in env if item.get("name") == "SIMULATION_CALLBACK_SERVICE_ACCOUNT"), ""))')
+    if [ "${CONFIGURED_CALLBACK_SA}" != "${BACKEND_SA}" ]; then
+        echo "✗ Django worker callback identity is not configured for this backend."
+        echo "  expected: ${BACKEND_SA}"
+        echo "  deployed: ${CONFIGURED_CALLBACK_SA:-missing}"
+        echo "  Deploy the current LMS worker first: just gcp deploy-worker {{ stage }}"
+        exit 1
+    fi
+
     echo "✓ ${JOB_NAME} deployed at ${PINNED_IMAGE}"
-    echo ""
-    echo "Django callback allowlist required for this stage:"
-    echo "  TASK_OIDC_ALLOWED_SERVICE_ACCOUNTS=${MAIN_SA},${BACKEND_SA}"
-    echo "Apply that line to the stage's .django file, then run:"
-    echo "  just gcp deploy-config {{ stage }}"
+    echo "✓ Callback IAM and Django identity agree on ${BACKEND_SA}"
 
 # Deploy every released backend image at the same repository release tag.
 deploy-all stage image_tag="":
