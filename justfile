@@ -314,12 +314,14 @@ deploy slug stage image_tag="": (_check-slug slug)
         exit 1
     fi
 
-    STORAGE_ROLE=$(gcloud storage buckets get-iam-policy "gs://${SIMULATION_BUCKET}" \
+    STORAGE_BINDINGS=$(gcloud storage buckets get-iam-policy "gs://${SIMULATION_BUCKET}" \
         --project="${GCP_PROJECT_ID}" \
         --flatten="bindings[].members" \
-        --filter="bindings.role=roles/storage.objectUser AND bindings.members=serviceAccount:${BACKEND_SA}" \
-        --format="value(bindings.role)")
-    if [ -n "${STORAGE_ROLE}" ]; then
+        --format="value(bindings.role,bindings.members)")
+    BACKEND_STORAGE_BINDING=$(printf 'roles/storage.objectUser\tserviceAccount:%s' \
+        "${BACKEND_SA}")
+    if printf '%s\n' "${STORAGE_BINDINGS}" \
+            | grep -Fqx "${BACKEND_STORAGE_BINDING}"; then
         echo "✗ ${BACKEND_SA} still has bucket access; signed object URLs require none."
         exit 1
     fi

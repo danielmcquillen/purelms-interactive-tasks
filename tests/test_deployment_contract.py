@@ -474,6 +474,14 @@ def test_deploy_preserves_stage_and_identity_boundaries() -> None:
     assert "SIMULATION_CALLBACK_SERVICE_ACCOUNT" in recipe
     assert "gcloud run services get-iam-policy" in recipe
     assert 'if [ "${CONFIGURED_CALLBACK_SA}" != "${BACKEND_SA}" ]' in recipe
+    storage_check = recipe[
+        recipe.index(
+            "STORAGE_BINDINGS=$(gcloud storage buckets get-iam-policy"
+        ) : recipe.index('echo "✓ ${JOB_NAME} deployed')
+    ]
+    assert "--filter=" not in storage_check
+    assert '--flatten="bindings[].members"' in storage_check
+    assert 'grep -Fqx "${BACKEND_STORAGE_BINDING}"' in storage_check
     assert "TASK_OIDC_ALLOWED_SERVICE_ACCOUNTS=" not in recipe
 
 
