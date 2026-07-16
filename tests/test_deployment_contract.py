@@ -442,9 +442,17 @@ def test_deploy_resolves_tag_and_pins_job_to_digest() -> None:
 def test_deploy_preserves_stage_and_identity_boundaries() -> None:
     """Stages get distinct Jobs and containers run outside the Django identity."""
     recipe = _recipe("deploy", "deploy-all")
+    suffix_assignment = 'SUFFIX=$(if [ "{{ stage }}" = "prod" ]'
 
     assert "scripts/backend_inventory.py job-name" in recipe
     assert "JOB_NAME=$(python3 scripts/backend_inventory.py job-name" in recipe
+    assert suffix_assignment in recipe
+    assert recipe.index(suffix_assignment) < recipe.index(
+        'WORKER_SERVICE="${PURELMS_WORKER_SERVICE_BASE}${SUFFIX}"',
+    )
+    assert recipe.index(suffix_assignment) < recipe.index(
+        'SIMULATION_BUCKET="${PURELMS_SIMULATION_BUCKET_BASE}${SUFFIX}"',
+    )
     assert 'BACKEND_SA_NAME="purelms-sim-{{ stage }}"' in recipe
     assert 'MAIN_SA="purelms-cloudrun-{{ stage }}@' in recipe
     assert "roles/storage.objectUser" in recipe

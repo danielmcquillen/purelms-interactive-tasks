@@ -194,6 +194,7 @@ deploy slug stage image_tag="": (_check-slug slug)
         exit 1
     fi
 
+    SUFFIX=$(if [ "{{ stage }}" = "prod" ]; then printf ''; else printf '%s' '-{{ stage }}'; fi)
     IMAGE_SLUG=$(printf '%s' "{{ slug }}" | tr '_' '-')
     IMAGE="${PURELMS_IMAGE_BASE}/purelms-itask-${IMAGE_SLUG}"
     JOB_NAME=$(python3 scripts/backend_inventory.py job-name \
