@@ -3,8 +3,7 @@
  *
  * Renders a one-input form, POSTs the value as a parameter via
  * `helpers.api.submit`, polls via `helpers.api.pollStatus` until
- * terminal, then renders the run's terminal status + a "Run again"
- * affordance.
+ * terminal, then renders a learner-facing result.
  *
  * Used as the LMS's integration-test fixture for the dispatcher
  * → bundle → API → run-status pipeline. Real backends follow the
@@ -14,9 +13,8 @@
  * the LMS-side dispatcher never re-enters this element.
  */
 
-// Inline type definitions for the dispatcher contract. At v1 we
-// vendor these rather than publishing a shared @purelms/types
-// package — when a second backend exists we'll extract.
+// Inline type definitions for the small dispatcher contract. Bundles vendor
+// this shape so a task release remains self-contained.
 
 interface RunReference {
   id: string;
@@ -41,6 +39,9 @@ interface RunStatusResponse {
   is_terminal: boolean;
   completed_at: string | null;
   runtime_seconds: number | null;
+  created?: string;
+  dispatched_at?: string | null;
+  started_at?: string | null;
   // Populated by the LMS from the parsed output envelope on
   // terminal SUCCESS. Empty `{}` / `[]` for in-flight runs.
   outputs: Record<string, unknown>;
@@ -71,15 +72,42 @@ interface MountHelpers {
   meta: { bundle: string; unitBlockId: number };
 }
 
-export async function mount(
-  element: HTMLElement,
-  _config: Record<string, unknown>,
-  helpers: MountHelpers,
-): Promise<void> {
-  element.replaceChildren(buildFormUi(helpers));
+interface EchoLastRun {
+  parameters?: Record<string, unknown>;
+  run?: RunReference;
+  outputs?: Record<string, unknown>;
+  messages?: RunStatusResponse["messages"];
 }
 
-function buildFormUi(helpers: MountHelpers): HTMLElement {
+interface EchoConfig {
+  last_run?: EchoLastRun;
+}
+
+export async function mount(
+  element: HTMLElement,
+  configRaw: Record<string, unknown>,
+  helpers: MountHelpers,
+): Promise<void> {
+  const config = configRaw as EchoConfig;
+  const state = buildFormUi(helpers, config.last_run);
+  element.replaceChildren(state.root);
+
+  const lastRun = config.last_run;
+  if (lastRun?.outputs) {
+    renderSuccess(state.resultEl, lastRun.outputs, lastRun.run, lastRun.messages ?? []);
+    setStatus(state.statusEl, "Showing your last result — edit the value to run again.", "success");
+  } else if (lastRun?.run && !isTerminalStatus(lastRun.run.status)) {
+    state.submitBtn.disabled = true;
+    void pollRun(lastRun.run, state);
+  } else if (lastRun?.run && isTerminalStatus(lastRun.run.status)) {
+    setStatus(state.statusEl, "Your last run did not complete. You can try again.", "danger");
+  }
+}
+
+function buildFormUi(
+  helpers: MountHelpers,
+  lastRun?: EchoLastRun,
+): SubmitState & { root: HTMLElement } {
   const root = document.createElement("div");
   root.className = "purelms-echo-task";
 
@@ -96,7 +124,8 @@ function buildFormUi(helpers: MountHelpers): HTMLElement {
   input.type = "text";
   input.className = "form-control";
   input.required = true;
-  input.value = "hello";
+  const restoredValue = lastRun?.parameters?.["value"];
+  input.value = typeof restoredValue === "string" ? restoredValue : "hello";
 
   const submitBtn = document.createElement("button");
   submitBtn.type = "submit";
@@ -107,8 +136,8 @@ function buildFormUi(helpers: MountHelpers): HTMLElement {
   statusEl.className = "mt-3 small text-muted";
   statusEl.setAttribute("aria-live", "polite");
 
-  const resultEl = document.createElement("pre");
-  resultEl.className = "mt-3 mb-0 bg-light p-2 small";
+  const resultEl = document.createElement("div");
+  resultEl.className = "mt-3";
   resultEl.hidden = true;
 
   form.append(label, input, submitBtn);
@@ -119,7 +148,7 @@ function buildFormUi(helpers: MountHelpers): HTMLElement {
     void handleSubmit({ input, submitBtn, statusEl, resultEl, helpers });
   });
 
-  return root;
+  return { root, input, submitBtn, statusEl, resultEl, helpers };
 }
 
 interface SubmitState {
@@ -139,8 +168,9 @@ async function handleSubmit(state: SubmitState): Promise<void> {
   }
 
   submitBtn.disabled = true;
+  resultEl.replaceChildren();
   resultEl.hidden = true;
-  statusEl.textContent = "Submitting…";
+  setStatus(statusEl, "Submitting…");
 
   let outcome: SubmissionOutcomeResponse;
   try {
@@ -155,52 +185,147 @@ async function handleSubmit(state: SubmitState): Promise<void> {
       return;
     }
     const msg = (err as ApiError).detail ?? String(err);
-    statusEl.textContent = `Submission failed: ${msg}`;
+    setStatus(statusEl, `Submission failed: ${msg}`, "danger");
     submitBtn.disabled = false;
     return;
   }
 
   if (outcome.run === null) {
-    statusEl.textContent = "Run complete (synchronous).";
+    setStatus(statusEl, "Run complete.", "success");
     submitBtn.disabled = false;
     return;
   }
 
-  const run = outcome.run;
-  statusEl.textContent = `Run ${run.id} dispatched; polling…`;
+  await pollRun(outcome.run, state);
+}
 
+async function pollRun(run: RunReference, state: SubmitState): Promise<void> {
+  const { submitBtn, statusEl, resultEl, helpers } = state;
+  setStatus(statusEl, activeStatusText(run.status));
   try {
     for await (const status of helpers.api.pollStatus(run.id, {
       intervalSeconds: run.poll_interval_seconds || 2,
       deadlineAt: run.deadline_at,
     })) {
-      statusEl.textContent = `Run ${status.id}: ${status.status} (${status.progress_pct}%)`;
       if (status.is_terminal) {
-        const learnerError = (status.messages ?? []).find(
-          (message) => message.level === "error",
-        );
-        if (learnerError !== undefined) {
-          statusEl.textContent = learnerError.text;
-          statusEl.classList.remove("text-muted");
-          statusEl.classList.add("text-danger");
-        }
         renderTerminalResult(resultEl, status);
+        if (status.status === "success") {
+          const seconds = status.runtime_seconds?.toFixed(2);
+          setStatus(
+            statusEl,
+            seconds ? `Echo complete (${seconds}s).` : "Echo complete.",
+            "success",
+          );
+        } else {
+          const learnerError = (status.messages ?? []).find(
+            (message) => message.level === "error",
+          );
+          setStatus(
+            statusEl,
+            learnerError?.text ?? "We couldn't complete this simulation. Please try again.",
+            "danger",
+          );
+        }
         break;
       }
+      setStatus(statusEl, activeStatusText(status.status, status.progress_pct, status.progress_step));
     }
   } catch (err) {
-    statusEl.textContent = `Polling failed: ${String(err)}`;
+    setStatus(statusEl, `We lost contact with this run: ${String(err)}`, "danger");
   } finally {
     submitBtn.disabled = false;
   }
 }
 
 function renderTerminalResult(resultEl: HTMLElement, status: RunStatusResponse): void {
-  // JSON.stringify produces safe text — assign via textContent (no
-  // innerHTML). Even though the data comes from our own LMS, the
-  // bundle treats it as untrusted on principle.
-  resultEl.textContent = JSON.stringify(status, null, 2);
+  if (status.status === "success") {
+    renderSuccess(resultEl, status.outputs ?? {}, {
+      id: status.id,
+      status: status.status,
+      status_url: "",
+      poll_interval_seconds: 2,
+      websocket_url: null,
+      deadline_at: null,
+    }, status.messages ?? [], status.runtime_seconds);
+    return;
+  }
+  resultEl.replaceChildren();
+  resultEl.hidden = true;
+}
+
+function renderSuccess(
+  resultEl: HTMLElement,
+  outputs: Record<string, unknown>,
+  run: RunReference | undefined,
+  messages: RunStatusResponse["messages"],
+  runtimeSeconds: number | null = null,
+): void {
+  const card = document.createElement("div");
+  card.className = "alert alert-success mb-0";
+
+  const heading = document.createElement("div");
+  heading.className = "fw-semibold";
+  heading.textContent = "Backend response";
+
+  const value = document.createElement("div");
+  value.className = "mt-1 fs-5";
+  const echoed = outputs["echoed_parameters"];
+  const echoedValue =
+    typeof echoed === "object" && echoed !== null && "value" in echoed
+      ? (echoed as { value: unknown }).value
+      : echoed;
+  value.textContent = echoedValue === undefined ? "No value returned." : String(echoedValue);
+  card.append(heading, value);
+
+  for (const message of messages) {
+    if (message.level === "debug") continue;
+    const note = document.createElement("div");
+    note.className = "small mt-2";
+    note.textContent = message.text;
+    card.append(note);
+  }
+
+  if (run?.id || runtimeSeconds !== null) {
+    const details = document.createElement("div");
+    details.className = "small text-muted mt-2";
+    const parts = [run?.id ? `Run ${run.id}` : ""];
+    if (runtimeSeconds !== null) parts.push(`${runtimeSeconds.toFixed(2)}s runtime`);
+    details.textContent = parts.filter(Boolean).join(" · ");
+    card.append(details);
+  }
+
+  resultEl.replaceChildren(card);
   resultEl.hidden = false;
+}
+
+function activeStatusText(status: string, progressPct = 0, progressStep = ""): string {
+  if (isTerminalStatus(status)) return "Loading the completed result…";
+  if (status === "pending") return "Preparing your simulation…";
+  if (status === "dispatched") {
+    return "Starting the simulation environment… The first run can take a minute.";
+  }
+  const progress = progressPct > 0 ? ` (${progressPct}%)` : "";
+  const step = progressStep ? ` — ${progressStep}` : "";
+  return `Simulation is running${progress}${step}…`;
+}
+
+function isTerminalStatus(status: string): boolean {
+  return [
+    "success",
+    "failed_simulation",
+    "failed_runtime",
+    "cancelled",
+    "timed_out",
+  ].includes(status);
+}
+
+function setStatus(
+  statusEl: HTMLElement,
+  text: string,
+  tone: "muted" | "success" | "danger" = "muted",
+): void {
+  statusEl.className = `mt-3 small text-${tone}`;
+  statusEl.textContent = text;
 }
 
 export default mount;

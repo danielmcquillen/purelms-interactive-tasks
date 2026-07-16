@@ -12,7 +12,7 @@ BACKEND_DESCRIPTION = (
     "expected graph, then runs a pre-compiled Modelica Buildings Library FMU "
     "to report how the system responds."
 )
-BACKEND_VERSION = "0.2.5"
+BACKEND_VERSION = "0.2.6"
 
 # Parameter knobs the authoring UI can expose (mirrors interactive_task.yaml).
 EXPOSED_PARAMETERS = [

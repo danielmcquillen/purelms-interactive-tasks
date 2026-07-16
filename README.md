@@ -110,9 +110,9 @@ Cloud Run deployment is separate from publishing:
 
 ```bash
 # Run from purelms/ after sourcing its GCP operator configuration.
-just backends stage-bundles v0.2.4
+just backends stage-bundles vX.Y.Z
 git add purelms/static/backends
-git commit -m "build(simulations): stage v0.2.4 frontend bundles"
+git commit -m "build(simulations): stage vX.Y.Z frontend bundles"
 just gcp deploy-all prod
 just backends deploy energyplus_single_zone prod
 just backends deploy-all prod

@@ -189,4 +189,88 @@ describe("mount", () => {
     expect(verdict?.classList.contains("ok")).toBe(true);
     expect(host.querySelector(".mdl-chart")).not.toBeNull();
   });
+
+  it("restores and resumes an in-flight run after navigation", async () => {
+    exportFn.mockReturnValue(emptyExport());
+    const host = document.createElement("div");
+    let releasePoll!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releasePoll = resolve;
+    });
+    const pollStatus = vi.fn(async function* () {
+      yield {
+        id: "resume-modelica",
+        status: "dispatched",
+        progress_pct: 0,
+        progress_step: "",
+        is_terminal: false,
+        completed_at: null,
+        runtime_seconds: null,
+        outputs: {},
+        messages: [],
+      };
+      await gate;
+      yield {
+        id: "resume-modelica",
+        status: "success",
+        progress_pct: 100,
+        progress_step: "done",
+        is_terminal: true,
+        completed_at: "2026-05-24T00:00:00Z",
+        runtime_seconds: 0.2,
+        outputs: {
+          topology_correct: true,
+          room_temp_final_c: 21,
+          energy_used_kwh: 4,
+        },
+        messages: [],
+      };
+    });
+    const helpers = makeHelpers({
+      api: {
+        submit: vi.fn(),
+        pollStatus,
+      },
+    });
+
+    await mount(
+      host,
+      {
+        last_run: {
+          parameters: { boiler_nominal_power_kw: 14 },
+          run: {
+            id: "resume-modelica",
+            status: "dispatched",
+            status_url: "",
+            poll_interval_seconds: 1,
+            websocket_url: null,
+            deadline_at: null,
+          },
+        },
+      },
+      helpers,
+    );
+
+    await vi.waitFor(() => {
+      expect(host.querySelector(".mdl-status")?.textContent).toContain(
+        "Starting the simulation environment",
+      );
+    });
+    expect(
+      (host.querySelector("#mdl-7-boiler_nominal_power_kw") as HTMLInputElement).value,
+    ).toBe("14");
+    expect((host.querySelector(".mdl-run") as HTMLButtonElement).disabled).toBe(true);
+    expect(helpers.api.submit).not.toHaveBeenCalled();
+    expect(pollStatus).toHaveBeenCalledWith("resume-modelica", {
+      intervalSeconds: 1,
+      deadlineAt: null,
+    });
+
+    releasePoll();
+    await vi.waitFor(() => {
+      expect(host.querySelector(".mdl-verdict")?.textContent).toContain(
+        "matches the system",
+      );
+    });
+  });
 });

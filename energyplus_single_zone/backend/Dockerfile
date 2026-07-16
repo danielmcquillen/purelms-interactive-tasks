@@ -67,7 +67,7 @@ ARG PURELMS_IMAGE_VERSION="dev"
 ARG PURELMS_IMAGE_REVISION="unknown"
 ARG PURELMS_IMAGE_SOURCE="https://github.com/danielmcquillen/purelms-interactive-tasks"
 ARG PURELMS_BACKEND_SLUG="energyplus_single_zone"
-ARG PURELMS_TASK_VERSION="0.2.4"
+ARG PURELMS_TASK_VERSION="0.2.5"
 ARG PURELMS_SHARED_VERSION="0.5.0"
 
 LABEL org.opencontainers.image.title="PureLMS EnergyPlus Single-Zone InteractiveTask backend" \

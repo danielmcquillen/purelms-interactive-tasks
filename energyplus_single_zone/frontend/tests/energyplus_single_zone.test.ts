@@ -447,9 +447,128 @@ describe("mount() — submission", () => {
     await new Promise((r) => setTimeout(r, 10));
 
     const status = element.querySelector(".purelms-task-status");
-    expect(status?.textContent).toContain("Run failed");
+    expect(status?.textContent).toContain("bad climate");
     const results = element.querySelector(".purelms-task-results");
     expect(results?.textContent).toContain("bad climate");
+  });
+
+  it("restores and resumes an in-flight run after navigation", async () => {
+    const element = document.createElement("div");
+    let releasePoll!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releasePoll = resolve;
+    });
+    const pollStatus = vi.fn(async function* () {
+      yield {
+        id: "resume-energy",
+        status: "dispatched",
+        progress_pct: 0,
+        progress_step: "",
+        is_terminal: false,
+        completed_at: null,
+        runtime_seconds: null,
+        outputs: {},
+        messages: [],
+      };
+      await gate;
+      yield {
+        id: "resume-energy",
+        status: "success",
+        progress_pct: 100,
+        progress_step: "done",
+        is_terminal: true,
+        completed_at: "2026-05-24T00:00:00Z",
+        runtime_seconds: 0.4,
+        outputs: {
+          annual_heating_kWh: 1200,
+          annual_cooling_kWh: 200,
+          peak_heating_kW: 0.3,
+          notes: "resumed",
+        },
+        messages: [],
+      };
+    });
+    const helpers = makeHelpers({
+      api: {
+        submit: vi.fn(),
+        pollStatus,
+      },
+    });
+
+    await mount(
+      element,
+      {
+        last_run: {
+          parameters: {
+            glazing_u_value: 1.2,
+            window_area: 9,
+            climate_zone: "6A",
+          },
+          run: {
+            id: "resume-energy",
+            status: "dispatched",
+            status_url: "",
+            poll_interval_seconds: 1,
+            websocket_url: null,
+            deadline_at: null,
+          },
+        },
+      },
+      helpers,
+    );
+
+    await vi.waitFor(() => {
+      expect(element.textContent).toContain("Starting the simulation environment");
+    });
+    expect(
+      (element.querySelector("#purelms-42-glazing-u-value") as HTMLInputElement).value,
+    ).toBe("1.2");
+    expect((element.querySelector("button") as HTMLButtonElement).disabled).toBe(true);
+    expect(helpers.api.submit).not.toHaveBeenCalled();
+    expect(pollStatus).toHaveBeenCalledWith("resume-energy", {
+      intervalSeconds: 1,
+      deadlineAt: null,
+    });
+
+    releasePoll();
+    await vi.waitFor(() => {
+      expect(element.querySelector(".purelms-task-results")?.textContent).toContain(
+        "resumed",
+      );
+    });
+  });
+
+  it("restores a completed result without another API call", async () => {
+    const element = document.createElement("div");
+    const helpers = makeHelpers();
+    await mount(
+      element,
+      {
+        last_run: {
+          parameters: { window_area: 8 },
+          run: {
+            id: "complete-energy",
+            status: "success",
+            status_url: "",
+            poll_interval_seconds: 1,
+            websocket_url: null,
+            deadline_at: null,
+          },
+          outputs: {
+            annual_heating_kWh: 900,
+            annual_cooling_kWh: 100,
+            peak_heating_kW: 0.2,
+            notes: "saved result",
+          },
+          messages: [],
+        },
+      },
+      helpers,
+    );
+
+    expect(element.textContent).toContain("Showing your last result");
+    expect(element.textContent).toContain("saved result");
+    expect(helpers.api.submit).not.toHaveBeenCalled();
   });
 
   it("surfaces a submission error without polling", async () => {
@@ -606,7 +725,7 @@ describe("mount() — progress bar", () => {
     expect(modes).toContain("complete");
   });
 
-  it("uses the declared progress mode whenever a run reference is polled", async () => {
+  it("loads an already-terminal run without showing fake running progress", async () => {
     const element = document.createElement("div");
     const bar = makeRecordingBar();
     const submit = vi.fn(
@@ -643,9 +762,9 @@ describe("mount() — progress bar", () => {
     await submitAndSettle(element);
 
     const modes = bar.calls.map((c) => c.mode);
-    expect(modes).toContain("determinate");
     expect(modes).toContain("indeterminate");
     expect(modes).toContain("complete");
+    expect(modes).not.toContain("determinate");
   });
 
   it("drives the bar to ERROR on a submission failure", async () => {

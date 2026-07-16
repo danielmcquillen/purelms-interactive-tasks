@@ -44,6 +44,9 @@ export interface SimulationRunStatusResponse {
   is_terminal: boolean;
   completed_at: string | null;
   runtime_seconds: number | null;
+  created?: string;
+  dispatched_at?: string | null;
+  started_at?: string | null;
   outputs: Record<string, unknown>;
   messages: SimulationRunMessage[];
 }
@@ -108,6 +111,8 @@ export interface NumberParamConfig {
 export interface ModelicaLastRun {
   /** Submitted parameters — includes ``diagram_json`` plus the slider values. */
   parameters?: Record<string, unknown>;
+  /** Polling reference; non-terminal runs resume automatically on mount. */
+  run?: RunReference;
   /** Result outputs; present only when the run succeeded. */
   outputs?: ModelicaOutputs;
   /** Backend messages from that run. */

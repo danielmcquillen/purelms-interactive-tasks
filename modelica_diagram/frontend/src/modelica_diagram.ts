@@ -28,6 +28,7 @@ import type {
   ModelicaOutputs,
   MountFn,
   MountHelpers,
+  RunReference,
   Scenario,
   SimulationRunMessage,
   SimulationRunStatusResponse,
@@ -132,6 +133,16 @@ export const mount: MountFn = async (element, configRaw, helpers): Promise<void>
   // Restore the learner's last attempt (diagram + last result). The sliders are
   // already seeded from config.last_run inside buildParams.
   restoreLastRun(config.last_run, canvas, statusEl, resultsEl);
+  if (config.last_run?.run && !isTerminalStatus(config.last_run.run.status)) {
+    runBtn.disabled = true;
+    void pollRun(config.last_run.run, { runBtn, statusEl, resultsEl, helpers });
+  } else if (
+    config.last_run?.run &&
+    isTerminalStatus(config.last_run.run.status) &&
+    !config.last_run.outputs
+  ) {
+    statusEl.textContent = "Your last run did not complete. You can try again.";
+  }
 };
 
 export default mount;
@@ -278,19 +289,37 @@ async function handleSubmit(args: SubmitArgs): Promise<void> {
     return;
   }
 
-  setStatus("Running…");
+  await pollRun(outcome.run, { runBtn, statusEl, resultsEl, helpers });
+}
+
+interface PollRunArgs {
+  runBtn: HTMLButtonElement;
+  statusEl: HTMLElement;
+  resultsEl: HTMLElement;
+  helpers: MountHelpers;
+}
+
+async function pollRun(run: RunReference, args: PollRunArgs): Promise<void> {
+  const { runBtn, statusEl, resultsEl, helpers } = args;
+  const setStatus = (text: string): void => {
+    statusEl.textContent = text;
+  };
+  setStatus(activeStatusText(run.status));
   try {
-    for await (const status of helpers.api.pollStatus(outcome.run.id, {
-      intervalSeconds: outcome.run.poll_interval_seconds || 1,
-      deadlineAt: outcome.run.deadline_at,
+    for await (const status of helpers.api.pollStatus(run.id, {
+      intervalSeconds: run.poll_interval_seconds || 1,
+      deadlineAt: run.deadline_at,
     })) {
       if (status.is_terminal) {
         renderResult(status, resultsEl, setStatus);
         break;
       }
+      setStatus(
+        activeStatusText(status.status, status.progress_pct, status.progress_step),
+      );
     }
   } catch (err) {
-    setStatus(`Polling failed: ${humanize(err)}`);
+    setStatus(`We lost contact with this run: ${humanize(err)}`);
   } finally {
     runBtn.disabled = false;
   }
@@ -302,7 +331,12 @@ function renderResult(
   setStatus: (text: string) => void,
 ): void {
   if (status.status !== "success") {
-    setStatus(`Run failed: ${status.status}.`);
+    const learnerMessage = (status.messages ?? []).find(
+      (message) => message.level === "error",
+    );
+    setStatus(
+      learnerMessage?.text ?? "We couldn't complete this simulation. Please try again.",
+    );
     resultsEl.append(messageList(status.messages ?? [], true));
     return;
   }
@@ -312,6 +346,27 @@ function renderResult(
     status.messages ?? [],
     resultsEl,
   );
+}
+
+function activeStatusText(status: string, progressPct = 0, progressStep = ""): string {
+  if (isTerminalStatus(status)) return "Loading the completed result…";
+  if (status === "pending") return "Preparing your simulation…";
+  if (status === "dispatched") {
+    return "Starting the simulation environment… The first run can take a minute.";
+  }
+  const progress = progressPct > 0 ? ` (${progressPct}%)` : "";
+  const step = progressStep ? ` — ${progressStep}` : "";
+  return `Simulation is running${progress}${step}…`;
+}
+
+function isTerminalStatus(status: string): boolean {
+  return [
+    "success",
+    "failed_simulation",
+    "failed_runtime",
+    "cancelled",
+    "timed_out",
+  ].includes(status);
 }
 
 /** Render the verdict + notes + result cards + chart for a successful run.

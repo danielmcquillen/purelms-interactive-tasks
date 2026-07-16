@@ -10,7 +10,7 @@ schema_version: "purelms.interactive_task.v1"
 
 slug: modelica_diagram
 name: Modelica FMU Diagram
-version: 0.2.5
+version: 0.2.6
 description: |
   Build a hydronic heating loop (boiler -> pump -> radiator -> room) from
   Modelica Buildings Library components, connect them correctly, then adjust the

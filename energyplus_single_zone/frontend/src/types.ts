@@ -46,6 +46,9 @@ export interface SimulationRunStatusResponse {
   is_terminal: boolean;
   completed_at: string | null;
   runtime_seconds: number | null;
+  created?: string;
+  dispatched_at?: string | null;
+  started_at?: string | null;
   /** Backend's result-value dict (keys match
    * ``interactive_task.yaml``'s ``outputs[].name``). Populated by
    * the LMS from the parsed output envelope. Empty `{}` for in-
@@ -159,14 +162,19 @@ export interface EnumParamConfig {
  * ``mount()``. Each entry mirrors a manifest parameter; the bundle
  * applies these as overrides on top of the manifest defaults.
  *
- * v1 LMS doesn't yet populate this fully — the bundle should treat
- * missing entries as "use manifest defaults."
+ * Missing entries mean "use manifest defaults."
  */
 export interface EnergyPlusConfig {
   parameters?: {
     glazing_u_value?: NumberParamConfig;
     window_area?: NumberParamConfig;
     climate_zone?: EnumParamConfig;
+  };
+  last_run?: {
+    parameters?: Record<string, unknown>;
+    run?: RunReference;
+    outputs?: EnergyPlusOutputs;
+    messages?: SimulationRunMessage[];
   };
 }
 

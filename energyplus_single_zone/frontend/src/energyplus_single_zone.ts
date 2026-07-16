@@ -51,6 +51,7 @@ import type {
   MountHelpers,
   NumberParamConfig,
   ProgressBarController,
+  RunReference,
   SimulationRunStatusResponse,
 } from "./types";
 
@@ -68,10 +69,20 @@ interface ParameterState {
  */
 function buildInitialParameters(config: EnergyPlusConfig): ParameterState {
   const params = config.parameters ?? {};
+  const restored = config.last_run?.parameters ?? {};
   return {
-    glazing_u_value: params.glazing_u_value?.default ?? DEFAULT_GLAZING_U_VALUE,
-    window_area: params.window_area?.default ?? DEFAULT_WINDOW_AREA,
-    climate_zone: params.climate_zone?.default ?? DEFAULT_CLIMATE_ZONE,
+    glazing_u_value:
+      typeof restored["glazing_u_value"] === "number"
+        ? restored["glazing_u_value"]
+        : (params.glazing_u_value?.default ?? DEFAULT_GLAZING_U_VALUE),
+    window_area:
+      typeof restored["window_area"] === "number"
+        ? restored["window_area"]
+        : (params.window_area?.default ?? DEFAULT_WINDOW_AREA),
+    climate_zone:
+      typeof restored["climate_zone"] === "string"
+        ? restored["climate_zone"]
+        : (params.climate_zone?.default ?? DEFAULT_CLIMATE_ZONE),
   };
 }
 
@@ -204,6 +215,25 @@ export const mount: MountFn = async (
       helpers,
     });
   });
+
+  const lastRun = config.last_run;
+  if (lastRun?.outputs) {
+    statusEl.textContent = "Showing your last result — adjust and run again.";
+    statusEl.style.color = "#16a34a";
+    resultsEl.replaceChildren(buildResultCards(lastRun.outputs));
+  } else if (lastRun?.run && !isTerminalStatus(lastRun.run.status)) {
+    submitButton.disabled = true;
+    const ui = prepareRunUi(statusEl, progressEl, helpers);
+    void pollRun(lastRun.run, {
+      submitButton,
+      resultsEl,
+      helpers,
+      ui,
+    });
+  } else if (lastRun?.run && isTerminalStatus(lastRun.run.status)) {
+    statusEl.textContent = "Your last run did not complete. You can try again.";
+    statusEl.style.color = "#dc2626";
+  }
 };
 
 export default mount;
@@ -493,6 +523,18 @@ interface HandleSubmitArgs {
   helpers: MountHelpers;
 }
 
+interface RunUi {
+  bar: ProgressBarController | null;
+  setStatus(text: string, color?: string): void;
+}
+
+interface PollRunArgs {
+  submitButton: HTMLButtonElement;
+  resultsEl: HTMLElement;
+  helpers: MountHelpers;
+  ui: RunUi;
+}
+
 async function handleSubmit({
   parameters,
   submitButton,
@@ -503,31 +545,8 @@ async function handleSubmit({
 }: HandleSubmitArgs): Promise<void> {
   submitButton.disabled = true;
   resultsEl.replaceChildren();
-
-  // The LMS dispatcher provides the shared Bootstrap progress bar.
-  // Guard for older dispatchers that predate helpers.ui — the text
-  // status line is the fallback, so the task still works.
-  const bar = helpers.ui?.createProgressBar?.() ?? null;
-
-  // Status text has a SINGLE home. When the shared progress bar is
-  // present its (aria-live) caption IS the status line, so we hide the
-  // standalone text line and route status through the bar only —
-  // writing to both is what doubled the "Submitting…" message on
-  // screen (and double-announced it to assistive tech, since both
-  // nodes are aria-live). Without a bar, the text line is the fallback
-  // status surface and stays visible.
-  const setStatus = (text: string, color = "#6b7280"): void => {
-    if (bar) return;
-    statusEl.textContent = text;
-    statusEl.style.color = color;
-  };
-  if (bar) {
-    statusEl.style.display = "none";
-    statusEl.textContent = "";
-    progressEl.replaceChildren(bar.element);
-  } else {
-    statusEl.style.display = "";
-  }
+  const ui = prepareRunUi(statusEl, progressEl, helpers);
+  const { bar, setStatus } = ui;
 
   setStatus("Submitting…");
   bar?.indeterminate("Submitting…");
@@ -563,20 +582,36 @@ async function handleSubmit({
     return;
   }
 
-  // Every run reference is polled to terminal, including runs dispatched
-  // synchronously in local development. The terminal status endpoint is the
-  // one response shape that always includes outputs and learner messages.
-  const run = outcome.run;
-  const useDeterminate = helpers.meta.reportsProgress === true;
-  setStatus(`Run ${run.id} dispatched; polling…`);
-  if (bar) {
-    if (useDeterminate) {
-      bar.determinate(0, "Dispatched");
-    } else {
-      bar.indeterminate("Dispatched; polling…");
-    }
-  }
+  await pollRun(outcome.run, { submitButton, resultsEl, helpers, ui });
+}
 
+function prepareRunUi(
+  statusEl: HTMLElement,
+  progressEl: HTMLElement,
+  helpers: MountHelpers,
+): RunUi {
+  const bar = helpers.ui?.createProgressBar?.() ?? null;
+  const setStatus = (text: string, color = "#6b7280"): void => {
+    if (bar) return;
+    statusEl.textContent = text;
+    statusEl.style.color = color;
+  };
+  if (bar) {
+    statusEl.style.display = "none";
+    statusEl.textContent = "";
+    progressEl.replaceChildren(bar.element);
+  } else {
+    statusEl.style.display = "";
+  }
+  return { bar, setStatus };
+}
+
+async function pollRun(run: RunReference, args: PollRunArgs): Promise<void> {
+  const { submitButton, resultsEl, helpers, ui } = args;
+  const { bar, setStatus } = ui;
+  const useDeterminate = helpers.meta.reportsProgress === true;
+  setStatus(activeStatusText(run.status));
+  bar?.indeterminate(activeStatusText(run.status));
   try {
     for await (const status of helpers.api.pollStatus(run.id, {
       intervalSeconds: run.poll_interval_seconds || 2,
@@ -589,7 +624,7 @@ async function handleSubmit({
       }
       setStatus(formatProgressLine(status));
       if (bar) {
-        if (useDeterminate) {
+        if (status.status === "running" && useDeterminate) {
           bar.determinate(status.progress_pct, status.progress_step || "Running…");
         } else {
           bar.indeterminate(formatProgressLine(status));
@@ -617,13 +652,15 @@ function applyTerminalToBar(
   if (status.status === "success") {
     bar.complete(`Complete (${(status.runtime_seconds ?? 0).toFixed(2)}s)`);
   } else {
-    bar.error(`Failed: ${status.status}`);
+    bar.error("Run could not complete");
   }
 }
 
 function formatProgressLine(status: SimulationRunStatusResponse): string {
+  if (status.status !== "running") return activeStatusText(status.status);
   const stepPart = status.progress_step ? ` — ${status.progress_step}` : "";
-  return `Running: ${status.progress_pct}%${stepPart}`;
+  const pctPart = status.progress_pct > 0 ? ` (${status.progress_pct}%)` : "";
+  return `Simulation is running${pctPart}${stepPart}…`;
 }
 
 function renderTerminalResult(
@@ -640,8 +677,12 @@ function renderTerminalResult(
     return;
   }
   // Non-success terminal state — render the error message(s).
-  setStatus(`Run failed: ${status.status}.`, "#dc2626");
   const messages = status.messages ?? [];
+  const learnerMessage = messages.find((message) => message.level === "error");
+  setStatus(
+    learnerMessage?.text ?? "We couldn't complete this simulation. Please try again.",
+    "#dc2626",
+  );
   const errorBox = document.createElement("div");
   errorBox.style.cssText = `
     background: #fef2f2;
@@ -654,10 +695,33 @@ function renderTerminalResult(
     if (msg.level !== "error") continue;
     const p = document.createElement("p");
     p.style.margin = "4px 0";
-    p.textContent = `${msg.code}: ${msg.text}`;
+    p.textContent = msg.text;
     errorBox.append(p);
   }
-  resultsEl.replaceChildren(errorBox);
+  if (errorBox.childElementCount > 0) {
+    resultsEl.replaceChildren(errorBox);
+  } else {
+    resultsEl.replaceChildren();
+  }
+}
+
+function activeStatusText(status: string): string {
+  if (isTerminalStatus(status)) return "Loading the completed result…";
+  if (status === "pending") return "Preparing your simulation…";
+  if (status === "dispatched") {
+    return "Starting the simulation environment… The first run can take a minute.";
+  }
+  return "Simulation is running…";
+}
+
+function isTerminalStatus(status: string): boolean {
+  return [
+    "success",
+    "failed_simulation",
+    "failed_runtime",
+    "cancelled",
+    "timed_out",
+  ].includes(status);
 }
 
 function buildResultCards(outputs: Partial<EnergyPlusOutputs>): HTMLDivElement {

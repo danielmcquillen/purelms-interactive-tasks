@@ -3,7 +3,7 @@
  *
  * Light unit coverage: mount() inserts a form, submit calls
  * helpers.api.submit with the input value, polling cycles render
- * progress and terminal status. We don't try to test the
+ * startup, resume, and learner-facing terminal results. We don't test the
  * dispatcher → bundle integration here — that belongs to the LMS-side
  * integration test.
  */
@@ -96,7 +96,7 @@ describe("echo mount()", () => {
     expect(helpers.api.pollStatus).not.toHaveBeenCalled();
   });
 
-  it("polls and renders terminal status for async runs", async () => {
+  it("polls and renders a learner-facing result for async runs", async () => {
     const { helpers } = makeHelpers({
       submitOutcome: {
         attempt: null,
@@ -119,6 +119,8 @@ describe("echo mount()", () => {
           is_terminal: true,
           completed_at: "2026-05-21T12:00:00Z",
           runtime_seconds: 0.5,
+          outputs: { echoed_parameters: { value: "hello" } },
+          messages: [],
         },
       ],
     });
@@ -127,10 +129,97 @@ describe("echo mount()", () => {
     host.querySelector<HTMLFormElement>("form")!.requestSubmit();
     await new Promise((r) => setTimeout(r, 10));
 
-    const result = host.querySelector<HTMLPreElement>("pre");
-    expect(result?.hidden).toBe(false);
-    expect(result?.textContent).toContain("success");
+    const result = host.querySelector<HTMLElement>(".alert-success");
+    expect(result?.textContent).toContain("Backend response");
+    expect(result?.textContent).toContain("hello");
     expect(result?.textContent).toContain("abc-123");
+    expect(host.querySelector("pre")).toBeNull();
+  });
+
+  it("describes provider acceptance as startup, not execution", async () => {
+    let releasePoll!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releasePoll = resolve;
+    });
+    const { helpers } = makeHelpers({
+      submitOutcome: {
+        attempt: null,
+        run: {
+          id: "starting-123",
+          status: "dispatched",
+          status_url: "",
+          poll_interval_seconds: 1,
+          websocket_url: null,
+          deadline_at: null,
+        },
+        is_complete: false,
+      },
+    });
+    helpers.api.pollStatus = vi.fn(async function* () {
+      yield {
+        id: "starting-123",
+        status: "dispatched",
+        progress_pct: 0,
+        progress_step: "",
+        is_terminal: false,
+      };
+      await gate;
+    });
+
+    await mount(host, {}, helpers as never);
+    host.querySelector<HTMLFormElement>("form")!.requestSubmit();
+    await vi.waitFor(() => {
+      expect(host.textContent).toContain("Starting the simulation environment");
+    });
+    expect(host.textContent).not.toContain("running (0%)");
+    releasePoll();
+  });
+
+  it("restores parameters and resumes an in-flight run after navigation", async () => {
+    const { helpers } = makeHelpers({
+      submitOutcome: { attempt: null, run: null, is_complete: true },
+      pollStatuses: [
+        {
+          id: "resume-123",
+          status: "success",
+          progress_pct: 100,
+          progress_step: "done",
+          is_terminal: true,
+          completed_at: "2026-05-21T12:00:00Z",
+          runtime_seconds: 0.2,
+          outputs: { echoed_parameters: { value: "restored" } },
+          messages: [],
+        },
+      ],
+    });
+
+    await mount(
+      host,
+      {
+        last_run: {
+          parameters: { value: "restored" },
+          run: {
+            id: "resume-123",
+            status: "dispatched",
+            status_url: "",
+            poll_interval_seconds: 1,
+            websocket_url: null,
+            deadline_at: null,
+          },
+        },
+      },
+      helpers as never,
+    );
+
+    await vi.waitFor(() => {
+      expect(host.querySelector(".alert-success")?.textContent).toContain("restored");
+    });
+    expect(host.querySelector<HTMLInputElement>("input")?.value).toBe("restored");
+    expect(helpers.api.submit).not.toHaveBeenCalled();
+    expect(helpers.api.pollStatus).toHaveBeenCalledWith("resume-123", {
+      intervalSeconds: 1,
+      deadlineAt: null,
+    });
   });
 
   it("shows the learner-safe message when a run fails at runtime", async () => {
