@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -153,6 +154,68 @@ def test_simulate_without_reporter_runs_silently():
         {"glazing_u_value": 2.5, "window_area": 5.0, "climate_zone": "5A"},
     )
     assert result["annual_heating_kWh"] == pytest.approx(1650.0, rel=0.01)
+
+
+def test_run_energyplus_uses_native_api_progress(monkeypatch, tmp_path):
+    """EnergyPlus Runtime API percentages are mapped into the backend lifecycle."""
+    callbacks: dict[str, object] = {}
+    observed_args: list[str] = []
+    deleted_states: list[object] = []
+
+    class FakeStateManager:
+        """Minimal EnergyPlus state-manager double."""
+
+        def new_state(self):
+            return object()
+
+        def delete_state(self, state):
+            deleted_states.append(state)
+
+    class FakeRuntime:
+        """Minimal Runtime API double that exercises both callbacks."""
+
+        def callback_progress(self, _state, callback):
+            callbacks["progress"] = callback
+
+        def callback_message(self, _state, callback):
+            callbacks["message"] = callback
+
+        def run_energyplus(self, _state, args):
+            observed_args.extend(args)
+            progress = callbacks["progress"]
+            message = callbacks["message"]
+            for value in (0, 25, 50, 100):
+                progress(value)
+            message(b"EnergyPlus completed successfully")
+            return 0
+
+    class FakeEnergyPlusAPI:
+        """Container for the fake Runtime and State APIs."""
+
+        def __init__(self):
+            self.runtime = FakeRuntime()
+            self.state_manager = FakeStateManager()
+
+    package = types.ModuleType("pyenergyplus")
+    api_module = types.ModuleType("pyenergyplus.api")
+    api_module.EnergyPlusAPI = FakeEnergyPlusAPI
+    monkeypatch.setitem(sys.modules, "pyenergyplus", package)
+    monkeypatch.setitem(sys.modules, "pyenergyplus.api", api_module)
+
+    events: list[tuple[int, str]] = []
+    returncode, output, error = runner._run_energyplus(
+        tmp_path / "in.idf",
+        tmp_path / "weather.epw",
+        tmp_path,
+        on_progress=lambda pct, step: events.append((pct, step)),
+    )
+
+    assert returncode == 0
+    assert [pct for pct, _step in events] == [10, 30, 50, 90]
+    assert "EnergyPlus completed successfully" in output
+    assert error == output
+    assert "--output-directory" in observed_args
+    assert deleted_states
 
 
 # ---------------------------------------------------------------------

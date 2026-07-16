@@ -106,6 +106,7 @@ function makeHelpers(overrides: Partial<MountHelpers> = {}): MountHelpers {
       ...overrides.api,
     },
     escape: (v: string) => v,
+    ...(overrides.ui ? { ui: overrides.ui } : {}),
     meta: {
       bundle: "modelica_diagram.js",
       unitBlockId: 7,
@@ -188,6 +189,70 @@ describe("mount", () => {
     const verdict = host.querySelector(".mdl-verdict");
     expect(verdict?.classList.contains("ok")).toBe(true);
     expect(host.querySelector(".mdl-chart")).not.toBeNull();
+  });
+
+  it("delegates polled progress to the LMS-owned progress controller", async () => {
+    exportFn.mockReturnValue(correctLoopExport());
+    const host = document.createElement("div");
+    const update = vi.fn();
+    const complete = vi.fn();
+    const helpers = makeHelpers({
+      api: {
+        submit: vi.fn(async () => ({
+          attempt: null,
+          run: {
+            id: "progress-modelica",
+            status: "dispatched",
+            status_url: "",
+            poll_interval_seconds: 1,
+            websocket_url: null,
+            deadline_at: null,
+          },
+          is_complete: false,
+        })),
+        pollStatus: async function* () {
+          yield {
+            id: "progress-modelica",
+            status: "running",
+            progress_pct: null,
+            progress_step: "Checking diagram",
+            is_terminal: false,
+            completed_at: null,
+            runtime_seconds: null,
+            outputs: {},
+            messages: [],
+          };
+          yield {
+            id: "progress-modelica",
+            status: "success",
+            progress_pct: 100,
+            progress_step: "Complete",
+            is_terminal: true,
+            completed_at: null,
+            runtime_seconds: 0.12,
+            outputs: { topology_correct: true },
+            messages: [],
+          };
+        },
+      },
+      ui: {
+        createProgressBar: () => ({
+          element: document.createElement("div"),
+          update,
+          indeterminate: vi.fn(),
+          determinate: vi.fn(),
+          complete,
+          error: vi.fn(),
+          remove: vi.fn(),
+        }),
+      },
+    });
+
+    await mount(host, {}, helpers);
+    (host.querySelector(".mdl-run") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(complete).toHaveBeenCalled());
+
+    expect(update).toHaveBeenCalledWith(null, "Checking diagram");
   });
 
   it("restores and resumes an in-flight run after navigation", async () => {

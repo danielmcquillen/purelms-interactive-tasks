@@ -30,6 +30,18 @@ outputs = simulate(envelope.parameters, on_progress=on_progress)
 write_output_envelope(location, output_envelope, envelope.context)  # writes + /complete
 ```
 
+`make_progress_reporter()` is the backend-side throttling boundary. It accepts
+the wrapped tool's raw 0–100 values, floors them to `0`, `25`, `50`, `75`, or
+`100`, emits each milestone at most once, and also observes the envelope's
+`progress_min_interval_seconds`. The final `100` is never delayed. Alternate
+milestones can be passed explicitly when a backend has a documented need, but
+the default keeps polling and callback traffic deliberately sparse.
+
+This helper does not turn an indeterminate tool into a determinate one. A task
+declares `backend.progress_reporting: percentage` only when its tool exposes a
+genuine measure of completed work; otherwise it declares `none` and the LMS
+renders an animated indeterminate bar.
+
 The mode is read from the environment's *shape* (which env vars are set;
 whether the callback URL is `http(s)` vs the `file:///dev/null`
 sentinel) — a backend never branches on "am I local or cloud".

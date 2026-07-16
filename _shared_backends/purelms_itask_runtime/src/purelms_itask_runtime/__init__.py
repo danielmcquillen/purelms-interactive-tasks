@@ -9,8 +9,10 @@ worker-callback contract behind three calls, so every backend's
 
 from __future__ import annotations
 
+from purelms_itask_runtime.runtime import DEFAULT_PROGRESS_MILESTONES
 from purelms_itask_runtime.runtime import CallbackAuthenticationError
 from purelms_itask_runtime.runtime import CompleteCallbackError
+from purelms_itask_runtime.runtime import ProgressReporter
 from purelms_itask_runtime.runtime import RuntimeConfigError
 from purelms_itask_runtime.runtime import RuntimeLocation
 from purelms_itask_runtime.runtime import make_progress_reporter
@@ -18,8 +20,10 @@ from purelms_itask_runtime.runtime import read_input_envelope
 from purelms_itask_runtime.runtime import write_output_envelope
 
 __all__ = [
+    "DEFAULT_PROGRESS_MILESTONES",
     "CallbackAuthenticationError",
     "CompleteCallbackError",
+    "ProgressReporter",
     "RuntimeConfigError",
     "RuntimeLocation",
     "make_progress_reporter",

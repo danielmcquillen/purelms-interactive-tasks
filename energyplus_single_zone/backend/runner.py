@@ -50,8 +50,8 @@ import re
 import shutil
 import sqlite3
 import string
-import subprocess
 import tempfile
+from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -94,10 +94,11 @@ _GJ_TO_KWH: float = 277.778
 _W_TO_KW: float = 1.0 / 1000.0
 _J_TO_KWH: float = 1.0 / 3_600_000.0
 
-# Hard wall-clock budget for the subprocess. The manifest declares a
-# 30 s timeout; we give the binary a little more headroom and let the
-# LMS layer enforce its own.
-_ENERGYPLUS_TIMEOUT_SECONDS: int = 120
+# EnergyPlus's native 0-100 run percentage occupies the middle of the overall
+# backend lifecycle. Validation/model preparation happens before it and result
+# extraction happens after it.
+_ENERGYPLUS_PROGRESS_START: int = 10
+_ENERGYPLUS_PROGRESS_END: int = 90
 
 # Preferred reporting-frequency order when mining an output variable —
 # pick exactly one so an IDF requesting the same variable at multiple
@@ -164,6 +165,7 @@ def simulate(
             problem, not the learner's fault.
     """
     emit = on_progress if on_progress is not None else _noop_progress
+    emit(0, "Starting")
 
     # Validate up front (shared by both modes). ``get_climate_zone``
     # raises ValueError on an unknown zone; the float helpers raise
@@ -177,7 +179,7 @@ def simulate(
     mode = _select_mode()
     logger.info("simulate: mode=%s zone=%s", mode, zone.code)
     if mode == "energyplus":
-        emit(20, "Building EnergyPlus model")
+        emit(15, "Building EnergyPlus model")
         result = _simulate_energyplus(
             u_value=u_value,
             area=area,
@@ -185,7 +187,7 @@ def simulate(
             on_progress=emit,
         )
     else:
-        emit(40, "Running analytical model")
+        emit(50, "Running analytical model")
         result = _simulate_analytical(u_value=u_value, area=area, zone=zone)
     emit(100, "Complete")
     return result
@@ -245,8 +247,12 @@ def _simulate_energyplus(
     idf_path = work_dir / "in.idf"
     idf_path.write_text(idf_text)
 
-    emit(40, "Running EnergyPlus")
-    returncode, _stdout, stderr = _run_energyplus(idf_path, epw_path, work_dir)
+    returncode, _stdout, stderr = _run_energyplus(
+        idf_path,
+        epw_path,
+        work_dir,
+        on_progress=emit,
+    )
 
     err_path = work_dir / "eplusout.err"
     sql_path = work_dir / "eplusout.sql"
@@ -258,7 +264,7 @@ def _simulate_energyplus(
         )
         raise ValueError(msg)
 
-    emit(85, "Extracting results")
+    emit(95, "Extracting results")
     heating_kwh, cooling_kwh, peak_kw = extract_metrics(sql_path)
 
     # Peak fallback: if the sizing/output-variable peak wasn't found in
@@ -317,31 +323,69 @@ def _run_energyplus(
     idf_path: Path,
     epw_path: Path,
     work_dir: Path,
+    *,
+    on_progress: ProgressFn | None = None,
 ) -> tuple[int, str, str]:
-    """Execute ``energyplus --weather <epw> --output-directory <dir> <idf>``.
+    """Run EnergyPlus through its Runtime API with native progress callbacks.
 
-    Returns ``(returncode, stdout, stderr)``. Does not raise on a
-    non-zero exit — the caller inspects the returncode + SQL output.
+    The EnergyPlus 25.2 Python API reports a genuine 0-100 simulation
+    percentage. It is mapped into 10-90% of the backend lifecycle before being
+    handed to the shared quarter-step/time throttler. The execution provider
+    remains the hard timeout/process boundary for the container.
+
+    Returns ``(returncode, captured_messages, error)``. API setup/runtime
+    exceptions become a non-zero result so the caller writes a clean
+    ``FAILED_RUNTIME`` output envelope.
     """
-    cmd = [
-        _ENERGYPLUS_BIN,
+    args = [
         "--output-directory",
         str(work_dir),
         "--weather",
         str(epw_path),
         str(idf_path),
     ]
-    logger.info("executing: %s", " ".join(cmd))
-    result = subprocess.run(
-        cmd,
-        check=False,
-        cwd=work_dir,
-        capture_output=True,
-        text=True,
-        timeout=_ENERGYPLUS_TIMEOUT_SECONDS,
-    )
-    logger.info("energyplus returncode=%d", result.returncode)
-    return result.returncode, result.stdout, result.stderr
+    logger.info("executing EnergyPlus Runtime API: %s", " ".join(args))
+    messages: deque[str] = deque(maxlen=100)
+    emit = on_progress if on_progress is not None else _noop_progress
+
+    try:
+        from pyenergyplus.api import EnergyPlusAPI  # noqa: PLC0415
+    except Exception as exc:
+        return 1, "", f"EnergyPlus Python API is unavailable: {exc}"
+
+    try:
+        api = EnergyPlusAPI()
+        state = api.state_manager.new_state()
+    except Exception as exc:
+        return 1, "", f"EnergyPlus Runtime API could not initialize: {exc}"
+
+    def report_tool_progress(raw_pct: int) -> None:
+        """Map EnergyPlus's percentage into the overall backend lifecycle."""
+        span = _ENERGYPLUS_PROGRESS_END - _ENERGYPLUS_PROGRESS_START
+        overall_pct = _ENERGYPLUS_PROGRESS_START + round(raw_pct * span / 100)
+        emit(overall_pct, "Running EnergyPlus")
+
+    def capture_message(raw: bytes | str) -> None:
+        """Keep a bounded diagnostic tail for envelope-safe failure handling."""
+        text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
+        messages.append(text.strip())
+
+    try:
+        api.runtime.callback_progress(state, report_tool_progress)
+        api.runtime.callback_message(state, capture_message)
+        returncode = int(api.runtime.run_energyplus(state, args))
+    except Exception as exc:
+        returncode = 1
+        messages.append(f"EnergyPlus Runtime API failed: {exc}")
+    finally:
+        try:
+            api.state_manager.delete_state(state)
+        except Exception:
+            logger.exception("EnergyPlus state cleanup failed")
+
+    captured = "\n".join(message for message in messages if message)
+    logger.info("energyplus returncode=%d", returncode)
+    return returncode, captured, captured
 
 
 # ---------------------------------------------------------------------

@@ -34,7 +34,7 @@ interface SubmissionOutcomeResponse {
 interface RunStatusResponse {
   id: string;
   status: string;
-  progress_pct: number;
+  progress_pct: number | null;
   progress_step: string;
   is_terminal: boolean;
   completed_at: string | null;
@@ -60,6 +60,16 @@ interface PollOptions {
   deadlineAt?: string | null;
 }
 
+interface ProgressBarController {
+  readonly element: HTMLElement;
+  update(pct: number | null, label?: string): void;
+  indeterminate(label?: string): void;
+  determinate(pct: number, label?: string): void;
+  complete(label?: string): void;
+  error(label?: string): void;
+  remove(): void;
+}
+
 interface MountHelpers {
   api: {
     submit(parameters: Record<string, unknown>): Promise<SubmissionOutcomeResponse>;
@@ -67,6 +77,7 @@ interface MountHelpers {
   };
   escape(value: string): string;
   ui?: {
+    createProgressBar?(): ProgressBarController;
     renderSubmissionError?(error: unknown): HTMLElement | null;
   };
   meta: { bundle: string; unitBlockId: number };
@@ -98,7 +109,7 @@ export async function mount(
     setStatus(state.statusEl, "Showing your last result — edit the value to run again.", "success");
   } else if (lastRun?.run && !isTerminalStatus(lastRun.run.status)) {
     state.submitBtn.disabled = true;
-    void pollRun(lastRun.run, state);
+    void pollRun(lastRun.run, state, prepareRunUi(state));
   } else if (lastRun?.run && isTerminalStatus(lastRun.run.status)) {
     setStatus(state.statusEl, "Your last run did not complete. You can try again.", "danger");
   }
@@ -136,25 +147,29 @@ function buildFormUi(
   statusEl.className = "mt-3 small text-muted";
   statusEl.setAttribute("aria-live", "polite");
 
+  const progressEl = document.createElement("div");
+  progressEl.className = "purelms-task-progress-host";
+
   const resultEl = document.createElement("div");
   resultEl.className = "mt-3";
   resultEl.hidden = true;
 
   form.append(label, input, submitBtn);
-  root.append(form, statusEl, resultEl);
+  root.append(form, statusEl, progressEl, resultEl);
 
   form.addEventListener("submit", (ev) => {
     ev.preventDefault();
-    void handleSubmit({ input, submitBtn, statusEl, resultEl, helpers });
+    void handleSubmit({ input, submitBtn, statusEl, progressEl, resultEl, helpers });
   });
 
-  return { root, input, submitBtn, statusEl, resultEl, helpers };
+  return { root, input, submitBtn, statusEl, progressEl, resultEl, helpers };
 }
 
 interface SubmitState {
   input: HTMLInputElement;
   submitBtn: HTMLButtonElement;
   statusEl: HTMLElement;
+  progressEl: HTMLElement;
   resultEl: HTMLElement;
   helpers: MountHelpers;
 }
@@ -170,7 +185,9 @@ async function handleSubmit(state: SubmitState): Promise<void> {
   submitBtn.disabled = true;
   resultEl.replaceChildren();
   resultEl.hidden = true;
-  setStatus(statusEl, "Submitting…");
+  const ui = prepareRunUi(state);
+  ui.setStatus("Submitting…");
+  ui.bar?.indeterminate("Submitting…");
 
   let outcome: SubmissionOutcomeResponse;
   try {
@@ -180,28 +197,61 @@ async function handleSubmit(state: SubmitState): Promise<void> {
     // top-up / upgrade CTA. Anything else falls back to status text.
     const alertEl = helpers.ui?.renderSubmissionError?.(err) ?? null;
     if (alertEl) {
-      statusEl.replaceChildren(alertEl);
+      resultEl.replaceChildren(alertEl);
+      resultEl.hidden = false;
+      ui.bar?.error("Submission failed");
       submitBtn.disabled = false;
       return;
     }
     const msg = (err as ApiError).detail ?? String(err);
-    setStatus(statusEl, `Submission failed: ${msg}`, "danger");
+    ui.setStatus(`Submission failed: ${msg}`, "danger");
+    ui.bar?.error("Submission failed");
     submitBtn.disabled = false;
     return;
   }
 
   if (outcome.run === null) {
-    setStatus(statusEl, "Run complete.", "success");
+    ui.setStatus("Run complete.", "success");
+    ui.bar?.complete("Run complete");
     submitBtn.disabled = false;
     return;
   }
 
-  await pollRun(outcome.run, state);
+  await pollRun(outcome.run, state, ui);
 }
 
-async function pollRun(run: RunReference, state: SubmitState): Promise<void> {
-  const { submitBtn, statusEl, resultEl, helpers } = state;
-  setStatus(statusEl, activeStatusText(run.status));
+interface RunUi {
+  bar: ProgressBarController | null;
+  setStatus(text: string, tone?: "muted" | "success" | "danger"): void;
+}
+
+function prepareRunUi(state: SubmitState): RunUi {
+  const bar = state.helpers.ui?.createProgressBar?.() ?? null;
+  const setRunStatus = (
+    text: string,
+    tone: "muted" | "success" | "danger" = "muted",
+  ): void => {
+    if (bar) return;
+    setStatus(state.statusEl, text, tone);
+  };
+  if (bar) {
+    state.statusEl.hidden = true;
+    state.statusEl.textContent = "";
+    state.progressEl.replaceChildren(bar.element);
+  } else {
+    state.statusEl.hidden = false;
+  }
+  return { bar, setStatus: setRunStatus };
+}
+
+async function pollRun(
+  run: RunReference,
+  state: SubmitState,
+  ui: RunUi,
+): Promise<void> {
+  const { submitBtn, resultEl, helpers } = state;
+  ui.setStatus(activeStatusText(run.status));
+  ui.bar?.update(null, activeStatusText(run.status));
   try {
     for await (const status of helpers.api.pollStatus(run.id, {
       intervalSeconds: run.poll_interval_seconds || 2,
@@ -211,27 +261,34 @@ async function pollRun(run: RunReference, state: SubmitState): Promise<void> {
         renderTerminalResult(resultEl, status);
         if (status.status === "success") {
           const seconds = status.runtime_seconds?.toFixed(2);
-          setStatus(
-            statusEl,
+          ui.setStatus(
             seconds ? `Echo complete (${seconds}s).` : "Echo complete.",
             "success",
           );
+          ui.bar?.complete(seconds ? `Echo complete (${seconds}s)` : "Echo complete");
         } else {
           const learnerError = (status.messages ?? []).find(
             (message) => message.level === "error",
           );
-          setStatus(
-            statusEl,
+          ui.setStatus(
             learnerError?.text ?? "We couldn't complete this simulation. Please try again.",
             "danger",
           );
+          ui.bar?.error("Run could not complete");
         }
         break;
       }
-      setStatus(statusEl, activeStatusText(status.status, status.progress_pct, status.progress_step));
+      const label = activeStatusText(
+        status.status,
+        status.progress_pct,
+        status.progress_step,
+      );
+      ui.setStatus(label);
+      ui.bar?.update(status.progress_pct, status.progress_step || label);
     }
   } catch (err) {
-    setStatus(statusEl, `We lost contact with this run: ${String(err)}`, "danger");
+    ui.setStatus(`We lost contact with this run: ${String(err)}`, "danger");
+    ui.bar?.error("Run could not complete");
   } finally {
     submitBtn.disabled = false;
   }
@@ -298,13 +355,19 @@ function renderSuccess(
   resultEl.hidden = false;
 }
 
-function activeStatusText(status: string, progressPct = 0, progressStep = ""): string {
+function activeStatusText(
+  status: string,
+  progressPct: number | null = null,
+  progressStep = "",
+): string {
   if (isTerminalStatus(status)) return "Loading the completed result…";
   if (status === "pending") return "Preparing your simulation…";
   if (status === "dispatched") {
     return "Starting the simulation environment… The first run can take a minute.";
   }
-  const progress = progressPct > 0 ? ` (${progressPct}%)` : "";
+  const progress = typeof progressPct === "number" && progressPct > 0
+    ? ` (${progressPct}%)`
+    : "";
   const step = progressStep ? ` — ${progressStep}` : "";
   return `Simulation is running${progress}${step}…`;
 }

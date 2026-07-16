@@ -73,6 +73,7 @@ function makeRecordingBar(): RecordingBar {
   };
   const controller: ProgressBarController = {
     element: document.createElement("div"),
+    update: record("update"),
     indeterminate: record("indeterminate"),
     determinate: record("determinate"),
     complete: record("complete"),
@@ -601,7 +602,7 @@ describe("mount() — submission", () => {
 });
 
 // ---------------------------------------------------------------------
-// Progress bar — the indeterminate/determinate decision matrix
+// Progress bar — backend progress delegation
 // ---------------------------------------------------------------------
 
 describe("mount() — progress bar", () => {
@@ -611,7 +612,7 @@ describe("mount() — progress bar", () => {
     return new Promise((r) => setTimeout(r, 10));
   }
 
-  it("uses a DETERMINATE bar on the async path when reportsProgress is true", async () => {
+  it("delegates percentage updates to the LMS-owned controller", async () => {
     const element = document.createElement("div");
     const bar = makeRecordingBar();
     const submit = vi.fn(
@@ -657,16 +658,17 @@ describe("mount() — progress bar", () => {
       makeHelpers({
         api: { submit, pollStatus },
         ui: { createProgressBar: () => bar.controller },
-        meta: { ...makeHelpers().meta, reportsProgress: true },
+        meta: { ...makeHelpers().meta, progressReporting: "percentage" },
       }),
     );
 
     await submitAndSettle(element);
 
     const modes = bar.calls.map((c) => c.mode);
-    // The in-flight poll drove a determinate update with the polled pct.
+    // The bundle passes the value through. The LMS-bound controller owns the
+    // determinate/indeterminate decision.
     expect(bar.calls).toContainEqual({
-      mode: "determinate",
+      mode: "update",
       args: [55, "Running EnergyPlus"],
     });
     // Terminal success → solid green complete bar; never an error.
@@ -674,7 +676,7 @@ describe("mount() — progress bar", () => {
     expect(modes).not.toContain("error");
   });
 
-  it("stays INDETERMINATE on the async path when reportsProgress is absent", async () => {
+  it("delegates updates even when the backend is indeterminate", async () => {
     const element = document.createElement("div");
     const bar = makeRecordingBar();
     const submit = vi.fn(
@@ -712,15 +714,14 @@ describe("mount() — progress bar", () => {
     await mount(
       element,
       {},
-      // No reportsProgress in meta — the bundle treats absent as false.
+      // The controller is already bound to the backend capability by the LMS.
       makeHelpers({ api: { submit, pollStatus }, ui: { createProgressBar: () => bar.controller } }),
     );
 
     await submitAndSettle(element);
 
     const modes = bar.calls.map((c) => c.mode);
-    // Never a determinate call — the polled progress_pct is ignored.
-    expect(modes).not.toContain("determinate");
+    expect(bar.calls).toContainEqual({ mode: "update", args: [55, "halfway"] });
     expect(modes).toContain("indeterminate");
     expect(modes).toContain("complete");
   });
@@ -755,7 +756,7 @@ describe("mount() — progress bar", () => {
       makeHelpers({
         api: { submit, pollStatus },
         ui: { createProgressBar: () => bar.controller },
-        meta: { ...makeHelpers().meta, reportsProgress: true },
+        meta: { ...makeHelpers().meta, progressReporting: "percentage" },
       }),
     );
 
@@ -875,7 +876,7 @@ describe("mount() — progress bar", () => {
       makeHelpers({
         api: { submit, pollStatus },
         ui: { createProgressBar: () => bar.controller },
-        meta: { ...makeHelpers().meta, reportsProgress: true },
+        meta: { ...makeHelpers().meta, progressReporting: "percentage" },
       }),
     );
 

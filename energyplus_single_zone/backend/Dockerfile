@@ -67,7 +67,7 @@ ARG PURELMS_IMAGE_VERSION="dev"
 ARG PURELMS_IMAGE_REVISION="unknown"
 ARG PURELMS_IMAGE_SOURCE="https://github.com/danielmcquillen/purelms-interactive-tasks"
 ARG PURELMS_BACKEND_SLUG="energyplus_single_zone"
-ARG PURELMS_TASK_VERSION="0.2.5"
+ARG PURELMS_TASK_VERSION="0.3.0"
 ARG PURELMS_SHARED_VERSION="0.5.0"
 
 LABEL org.opencontainers.image.title="PureLMS EnergyPlus Single-Zone InteractiveTask backend" \
@@ -87,14 +87,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # EnergyPlus binary + bundled weather, from the builder stage.
 COPY --from=eplus-builder /opt/energyplus /opt/energyplus
 COPY --from=eplus-builder /opt/weather /opt/weather
-ENV PATH="/opt/energyplus:${PATH}"
+ENV PATH="/opt/energyplus:${PATH}" \
+    PYTHONPATH="/opt/energyplus"
+RUN python -c "from pyenergyplus.api import EnergyPlusAPI; EnergyPlusAPI()"
 
 # Python deps: install the shared backend runtime (with its ``cloud``
 # extra) from the vendored wheels (staged by the justfile). The shared
 # contract and all external packages use the signed tag's uv.lock constraints.
 # google-auth[requests] provides the callback OIDC transport; object I/O uses
-# signed HTTPS URLs. No scientific deps: the runner shells out and parses
-# eplusout.sql with the stdlib sqlite3.
+# signed HTTPS URLs. No extra scientific wheels: the runner imports the Python
+# API bundled with EnergyPlus and parses eplusout.sql with stdlib sqlite3.
 WORKDIR /home/purelms
 COPY pyproject.toml ./
 COPY _vendor /vendor/

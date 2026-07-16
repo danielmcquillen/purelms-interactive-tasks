@@ -609,9 +609,8 @@ function prepareRunUi(
 async function pollRun(run: RunReference, args: PollRunArgs): Promise<void> {
   const { submitButton, resultsEl, helpers, ui } = args;
   const { bar, setStatus } = ui;
-  const useDeterminate = helpers.meta.reportsProgress === true;
   setStatus(activeStatusText(run.status));
-  bar?.indeterminate(activeStatusText(run.status));
+  bar?.update(null, activeStatusText(run.status));
   try {
     for await (const status of helpers.api.pollStatus(run.id, {
       intervalSeconds: run.poll_interval_seconds || 2,
@@ -623,13 +622,10 @@ async function pollRun(run: RunReference, args: PollRunArgs): Promise<void> {
         break;
       }
       setStatus(formatProgressLine(status));
-      if (bar) {
-        if (status.status === "running" && useDeterminate) {
-          bar.determinate(status.progress_pct, status.progress_step || "Running…");
-        } else {
-          bar.indeterminate(formatProgressLine(status));
-        }
-      }
+      bar?.update(
+        status.progress_pct,
+        status.progress_step || formatProgressLine(status),
+      );
     }
   } catch (err) {
     setStatus(`Polling failed: ${humanizeError(err)}`, "#dc2626");
@@ -659,7 +655,10 @@ function applyTerminalToBar(
 function formatProgressLine(status: SimulationRunStatusResponse): string {
   if (status.status !== "running") return activeStatusText(status.status);
   const stepPart = status.progress_step ? ` — ${status.progress_step}` : "";
-  const pctPart = status.progress_pct > 0 ? ` (${status.progress_pct}%)` : "";
+  const pctPart =
+    typeof status.progress_pct === "number" && status.progress_pct > 0
+      ? ` (${status.progress_pct}%)`
+      : "";
   return `Simulation is running${pctPart}${stepPart}…`;
 }
 

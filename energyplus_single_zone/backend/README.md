@@ -9,7 +9,7 @@ heating load for a single conditioned zone.
 
 | Mode | When | What runs |
 |---|---|---|
-| **`energyplus`** | The production container (binary baked in) | Builds a single-zone IDF from the parameters, runs the real EnergyPlus binary against the bundled per-zone EPW, mines `eplusout.sql`. |
+| **`energyplus`** | The production container (EnergyPlus baked in) | Builds a single-zone IDF, executes it through the EnergyPlus 25.2 Runtime API against the bundled per-zone EPW, mines `eplusout.sql`, and receives native 0–100 progress callbacks. |
 | **`analytical`** | Dev / CI / no binary on PATH | Pure-Python steady-state heat balance (`U × A × degree-days × hours`). No 500 MB dependency. Qualitatively correct, **not** a design tool. |
 
 Selection is via `PURELMS_EPLUS_MODE` (`auto` default → real if the
@@ -47,6 +47,16 @@ The image sets `PURELMS_EPLUS_MODE=energyplus` and
 the real simulation (and fails loud if the binary is somehow missing,
 rather than silently degrading to the analytical model).
 
+## Progress reporting
+
+The manifest declares `backend.progress_reporting: percentage`. EnergyPlus's
+official Runtime API `callback_progress` supplies a genuine simulation
+percentage; the runner maps that native range into 10–90% of the whole backend
+lifecycle so validation, IDF preparation, and result extraction have room on
+either side. The shared runtime then reduces the resulting stream to the
+default `0/25/50/75/100` callbacks before anything crosses the network. See the
+[EnergyPlus Runtime API documentation](https://energyplus.readthedocs.io/en/v25.2.0/runtime_8h.html).
+
 ## Verification status (read before trusting outputs)
 
 Verification is split into fast unit coverage and a real container smoke test:
@@ -61,6 +71,8 @@ Verification is split into fast unit coverage and a real container smoke test:
   from Validibot's production-proven EnergyPlus validator.
 - `parse_err_file` severity tagging + multi-line continuation.
 - `_select_mode` dispatch + the analytical model's physics.
+- EnergyPlus Runtime API state lifecycle, message capture, and native-progress
+  mapping through an API test double.
 
 **✅ Build-validated end-to-end (revalidated 2026-07-14, EnergyPlus 25.2):** built the
 image and ran the container against a real envelope (`just build` +
@@ -81,6 +93,10 @@ surfaced and fixed:
    (report-native GJ) so `_sum_end_use_row`'s `Units = 'GJ'` filter +
    GJ→kWh conversion match. (`JtoKWH` would store kWh and silently
    return 0.)
+
+The Runtime API execution refactor itself was unit-tested on 2026-07-17. Run
+`just smoke energyplus_single_zone` with Docker available before releasing
+0.3.0 to revalidate the packaged `pyenergyplus` import and real callback path.
 
 The fast unit suite covers everything binary-free, so the analytical fallback
 keeps lightweight development and CI working without the ~500 MB dependency.

@@ -136,6 +136,63 @@ describe("echo mount()", () => {
     expect(host.querySelector("pre")).toBeNull();
   });
 
+  it("delegates polled progress to the LMS-owned progress controller", async () => {
+    const { helpers } = makeHelpers({
+      submitOutcome: {
+        attempt: null,
+        run: {
+          id: "progress-123",
+          status: "dispatched",
+          status_url: "",
+          poll_interval_seconds: 1,
+          websocket_url: null,
+          deadline_at: null,
+        },
+        is_complete: false,
+      },
+      pollStatuses: [
+        {
+          id: "progress-123",
+          status: "running",
+          progress_pct: null,
+          progress_step: "Echoing parameters",
+          is_terminal: false,
+        },
+        {
+          id: "progress-123",
+          status: "success",
+          progress_pct: 100,
+          progress_step: "Complete",
+          is_terminal: true,
+          runtime_seconds: 0.1,
+          outputs: { echoed_parameters: { value: "hello" } },
+          messages: [],
+        },
+      ],
+    });
+    const update = vi.fn();
+    const complete = vi.fn();
+    Object.assign(helpers, {
+      ui: {
+        createProgressBar: () => ({
+          element: document.createElement("div"),
+          update,
+          indeterminate: vi.fn(),
+          complete,
+          error: vi.fn(),
+          remove: vi.fn(),
+        }),
+      },
+    });
+
+    await mount(host, {}, helpers as never);
+    host.querySelector<HTMLFormElement>("form")!.requestSubmit();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(update).toHaveBeenCalledWith(null, "Echoing parameters");
+    expect(complete).toHaveBeenCalled();
+  });
+
   it("describes provider acceptance as startup, not execution", async () => {
     let releasePoll!: () => void;
     const gate = new Promise<void>((resolve) => {

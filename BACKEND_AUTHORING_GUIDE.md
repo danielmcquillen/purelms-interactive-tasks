@@ -155,6 +155,7 @@ backend:
   credit_cost: 5                       # credits debited per successful run
   trust_tier: platform                 # platform | verified | community
   execution_mode: sync                 # v1 accepts only "sync"
+  progress_reporting: none             # none | percentage
   default_timeout_seconds: 600
   # default_memory_limit: "2Gi"        (optional override; default 2Gi)
   # default_cpu_limit: "1.0"           (optional override; default 1.0)
@@ -166,6 +167,7 @@ backend:
 | `credit_cost` | Compute credits debited per accepted run. Refunded on `FAILED_RUNTIME`, `TIMED_OUT`, or `CANCELLED`; kept on `FAILED_SIMULATION`. Zero means free runs. | Non-negative integer |
 | `trust_tier` | Friendly form. Mapped at install time to `SimulationTrustTier`: `platform` → tier 1, `verified` → tier 2, `community` → tier 3. Only tier 1 is currently launchable. | One of the three values |
 | `execution_mode` | v1 accepts ONLY `"sync"`; `"async"` returns an install error. This field is a future per-task routing declaration—not the transport used by a deployment. The shipped Cloud Run Jobs path already runs these containers asynchronously through GCS and callbacks. | `"sync"` |
+| `progress_reporting` | Whether the wrapped tool exposes a genuine measure of completed work. `none` gives the learner an animated indeterminate bar; `percentage` permits a determinate bar after the first callback. The backend, not the browser, owns throttling. | `none` (default) or `percentage` |
 | `default_timeout_seconds` | Wall-clock budget per run. Container is hard-killed after this. | Positive integer |
 | `default_memory_limit` | Container memory cap (Cloud Run / k8s syntax: `"2Gi"`, `"512Mi"`). | String |
 | `default_cpu_limit` | Container vCPU cap (e.g. `"1.0"`, `"0.5"`). | String |
@@ -178,6 +180,27 @@ frontend:
 ```
 
 `bundle` is the filename the LMS dispatcher will dynamic-import from `/static/backends/<slug>/<version>/<bundle>`. It must exist in `frontend/dist/` after `npm run build` (or `just frontend-build <slug>`). The versioned path prevents a new release from replacing the UI for an older pinned block.
+
+### Progress reporting
+
+Progress capability belongs to `backend:` because it describes the wrapped
+tool, not the frontend. Use `none` when work cannot be measured honestly. Use
+`percentage` only when the tool exposes genuine completed/total work (for
+example, EnergyPlus's Runtime API progress callback). Never advance a bar from
+elapsed wall time unless elapsed time is itself the domain's completed-work
+measure.
+
+Every backend is responsible for suppressing a noisy tool callback stream. The
+standard `make_progress_reporter()` does that at the backend boundary: raw
+values are floored to `0/25/50/75/100`, each milestone is emitted at most once,
+the envelope's `progress_min_interval_seconds` is respected, and terminal
+`100` is never delayed. The callback remains best-effort; completion is still
+authoritative.
+
+The browser does not reinterpret the manifest. It calls the LMS-owned progress
+controller's `update(status.progress_pct, label)`. The controller was already
+bound to the backend capability: `none` stays animated and indeterminate;
+`percentage` becomes determinate only after a non-null percentage arrives.
 
 ### Parameters (Layer 1 schema)
 
@@ -335,6 +358,7 @@ backend:
   credit_cost: 1
   trust_tier: platform
   execution_mode: sync
+  progress_reporting: none
   default_timeout_seconds: 60
 
 frontend:
@@ -641,12 +665,27 @@ interface MountHelpers {
   // HTML-escape a string for safe textContent / innerHTML insertion.
   escape(value: string): string;
 
+  ui: {
+    // Bootstrap progress UI already bound to backend.progress_reporting.
+    createProgressBar(): {
+      readonly element: HTMLElement;
+      update(pct: number | null, label?: string): void;
+      indeterminate(label?: string): void;
+      determinate(pct: number, label?: string): void;
+      complete(label?: string): void;
+      error(label?: string): void;
+      remove(): void;
+    };
+    renderSubmissionError(error: unknown): HTMLElement | null;
+  };
+
   // Per-mount diagnostics — read-only.
   meta: {
     bundle: string;             // the bundle filename
     unitBlockId: number;        // the UnitBlock placement PK
     creditCost: number | null;  // credits debited per run (from registration)
     backendAvailable: boolean | null;  // false → render "no longer available" state
+    progressReporting: "none" | "percentage";
   };
 }
 ```
@@ -673,12 +712,19 @@ async function handleSubmit(parameters: Record<string, unknown>) {
 
   // 2. Async: poll until terminal.
   const run = outcome.run;
+  const progressHost = document.createElement("div");
+  element.append(progressHost);
+  const progress = helpers.ui.createProgressBar();
+  progressHost.replaceChildren(progress.element);
+  progress.update(null, "Starting the simulation environment…");
   for await (const status of helpers.api.pollStatus(run.id, {
     intervalSeconds: run.poll_interval_seconds || 2,
   })) {
-    renderProgress(status);
+    progress.update(status.progress_pct, status.progress_step);
     if (status.is_terminal) {
       renderTerminal(status);
+      if (status.status === "success") progress.complete("Complete");
+      else progress.error("Run could not complete");
       break;
     }
   }
@@ -1096,6 +1142,7 @@ backend:
   credit_cost: 1
   trust_tier: platform
   execution_mode: sync
+  progress_reporting: none
   default_timeout_seconds: 30
 
 frontend:

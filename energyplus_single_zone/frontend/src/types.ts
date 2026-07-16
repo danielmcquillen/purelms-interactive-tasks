@@ -41,7 +41,7 @@ export interface SimulationRunStatusResponse {
    * ``string`` (rather than a union) for forward-compat: a server
    * adding a new status value shouldn't break the bundle compile. */
   status: string;
-  progress_pct: number;
+  progress_pct: number | null;
   progress_step: string;
   is_terminal: boolean;
   completed_at: string | null;
@@ -74,6 +74,8 @@ export interface PollHelperOptions {
  */
 export interface ProgressBarController {
   readonly element: HTMLElement;
+  /** Apply backend progress using the capability bound by the LMS. */
+  update(pct: number | null, label?: string): void;
   /** Animated striped full-width bar — work in progress, no measurable %. */
   indeterminate(label?: string): void;
   /** Filled bar at `pct` (0–100) with an optional label. */
@@ -116,11 +118,9 @@ export interface MountHelpers {
     unitBlockId: number;
     creditCost: number | null;
     backendAvailable: boolean | null;
-    /**
-     * Whether the backend declares it emits intermediate progress
-     * (manifest ``frontend.reports_progress``). Optional for
-     * backward-compat with older dispatchers; treat absent as false.
-     */
+    /** Backend-owned progress capability from ``backend.progress_reporting``. */
+    progressReporting?: "none" | "percentage";
+    /** @deprecated Compatibility with dispatchers predating progressReporting. */
     reportsProgress?: boolean;
   };
 }

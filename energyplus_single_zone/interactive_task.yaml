@@ -1,6 +1,6 @@
 # EnergyPlus single-zone InteractiveTask — the first real domain backend.
 #
-# v0.2 runs a REAL EnergyPlus simulation. The backend builds a single-zone
+# Since v0.2 this runs a REAL EnergyPlus simulation. The backend builds a single-zone
 # IDF from the learner's parameters (WindowMaterial:SimpleGlazingSystem
 # takes the U-value directly; the window length is derived from the area),
 # runs the bundled EnergyPlus binary against a per-zone TMY weather file,
@@ -15,8 +15,9 @@
 # Bumped 0.1.0 → 0.2.0 (real EnergyPlus) → 0.2.1 (lms_outcomes grading
 # rule) → 0.2.2 (frontend.reports_progress capability flag) → 0.2.3
 # (authenticated callbacks and frontend hardening) → 0.2.4 (complete OIDC
-# transport dependencies) → 0.2.5 (truthful startup and resumable frontend).
-# Re-install with ``--replace-active`` to make 0.2.5
+# transport dependencies) → 0.2.5 (truthful startup and resumable frontend)
+# → 0.3.0 (native EnergyPlus percentage progress + standard progress contract).
+# Re-install with ``--replace-active`` to make 0.3.0
 # the authoring default; existing blocks
 # retain their exact pin until an author upgrades them.
 
@@ -24,14 +25,14 @@ schema_version: "purelms.interactive_task.v1"
 
 slug: energyplus_single_zone
 name: EnergyPlus Single-Zone
-version: 0.2.5
+version: 0.3.0
 description: |
   Single-zone building-energy InteractiveTask. The learner picks a
   glazing U-value, window area, and climate zone; the backend
   computes annual heating + cooling energy and peak heating load
   through the window.
 
-  v0.2 runs a real EnergyPlus simulation (single-zone IDF generated
+  The EnergyPlus path runs a real simulation (single-zone IDF generated
   from the parameters, run against a bundled TMY weather file per
   climate zone). A pure-Python analytical model is the binary-free
   fallback for dev/CI, capturing the dominant effects (lower U → less
@@ -40,7 +41,7 @@ description: |
 
 backend:
   # Image name derives from slug by ``s/_/-/g`` →
-  # ``purelms-itask-energyplus-single-zone:0.2.0``.
+  # ``purelms-itask-energyplus-single-zone:0.3.0``.
   # Local builds via ``just build energyplus_single_zone`` tag with
   # ``:dev``; production deploys push to a registry with the
   # version tag.
@@ -48,6 +49,9 @@ backend:
   credit_cost: 1
   trust_tier: platform
   execution_mode: sync
+  # EnergyPlus's Runtime API supplies a genuine 0-100 simulation percentage.
+  # The shared backend reporter maps it into sparse quarter-step callbacks.
+  progress_reporting: percentage
   default_timeout_seconds: 30
 
 frontend:
@@ -55,14 +59,6 @@ frontend:
   # ``frontend/dist/energyplus_single_zone.js`` — a vanilla
   # TypeScript + Three.js bundle that mounts this filename.
   bundle: energyplus_single_zone.js
-  # Declares that this backend emits intermediate progress (the
-  # runner reports phase progress via the worker's progress
-  # callback). The LMS surfaces this to the dispatcher, which picks
-  # a determinate progress bar over an indeterminate one. Only
-  # observable on async deployments: a synchronous run blocks the
-  # submit request until done, so the browser still sees an
-  # indeterminate bar locally regardless of this flag.
-  reports_progress: true
 
 # Layer 1 parameter schema. Course authors tighten or hide
 # individual parameters at Layer 2 on the InteractiveTaskBlock.

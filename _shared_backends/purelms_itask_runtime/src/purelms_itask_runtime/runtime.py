@@ -43,6 +43,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -68,6 +69,12 @@ _COMPLETE_MAX_ATTEMPTS = 5
 _COMPLETE_BACKOFF_BASE_SECONDS = 1.0
 _DEFAULT_MAX_ENVELOPE_BYTES = 5 * 1024 * 1024
 _SHA256_HEX_LENGTH = 64
+_PROGRESS_MAX = 100
+
+# Tool callbacks can fire once per timestep/day/iteration. Only these
+# learner-meaningful milestones cross the network by default. A backend can
+# supply another ordered set when its domain genuinely needs finer reporting.
+DEFAULT_PROGRESS_MILESTONES = (0, 25, 50, 75, _PROGRESS_MAX)
 
 
 @dataclass(frozen=True)
@@ -353,42 +360,101 @@ def write_output_envelope(
     )
 
 
-def make_progress_reporter(
-    context: ExecutionContext,
-    started_at: float,
-) -> Callable[[int, str], None] | None:
-    """Build an ``on_progress(pct, step)`` reporter, or ``None`` if N/A.
+class ProgressReporter:
+    """Quantize and time-throttle one backend's progress callbacks.
 
-    Returns ``None`` when ``callback_url_progress`` isn't a real
-    ``http(s)`` endpoint — the case for synchronous backends, whose
-    blocking run is observed via the output envelope, not callbacks. When
-    ``None``, the domain code runs silently.
+    A wrapped tool may report at arbitrary frequency and precision. This
+    backend-side adapter floors raw values to configured milestones and emits
+    each milestone at most once while respecting the LMS-provided minimum
+    interval. The terminal 100% milestone bypasses the time interval so a
+    short run can still report that its backend work finished.
 
-    Emission is strictly best-effort: any failure (no auth library,
-    network error, non-2xx) is swallowed + logged to stderr so a flaky
-    progress callback can never fail an otherwise-good run.
-
-    Reports percentage, step, and elapsed seconds without logging parameters.
+    Delivery remains best-effort: callback failures are logged and swallowed;
+    the required completion callback is the authoritative lifecycle signal.
     """
-    url = context.callback_url_progress
-    if not url.lower().startswith(_HTTP_PREFIXES):
-        return None
 
-    def emit(pct: int, step: str) -> None:
+    def __init__(
+        self,
+        *,
+        context: ExecutionContext,
+        started_at: float,
+        milestones: tuple[int, ...] = DEFAULT_PROGRESS_MILESTONES,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
+        if (
+            not milestones
+            or milestones[0] != 0
+            or milestones[-1] != _PROGRESS_MAX
+            or tuple(sorted(set(milestones))) != milestones
+            or any(value < 0 or value > _PROGRESS_MAX for value in milestones)
+        ):
+            msg = "progress milestones must be unique, increasing, and span 0 to 100"
+            raise ValueError(msg)
+        self._context = context
+        self._started_at = started_at
+        self._milestones = milestones
+        self._clock = clock or time.monotonic
+        self._last_emitted: int | None = None
+        self._last_emitted_at: float | None = None
+
+    def __call__(self, pct: int | float, step: str) -> None:
+        """Accept raw tool progress and emit at most one quantized callback."""
+        numeric = max(0.0, min(100.0, float(pct)))
+        milestone = self._milestones[bisect_right(self._milestones, numeric) - 1]
+        if self._last_emitted is not None and milestone <= self._last_emitted:
+            return
+
+        now = self._clock()
+        interval = self._context.progress_min_interval_seconds
+        if (
+            milestone != _PROGRESS_MAX
+            and self._last_emitted_at is not None
+            and now - self._last_emitted_at < interval
+        ):
+            return
+
+        # Mark before the best-effort POST. A failed progress notification is
+        # not retried and must never slow or fail the simulation itself.
+        self._last_emitted = milestone
+        self._last_emitted_at = now
         try:
             body = ProgressCallback(
-                progress_pct=pct,
+                progress_pct=milestone,
                 step=step,
-                elapsed_seconds=time.monotonic() - started_at,
+                elapsed_seconds=now - self._started_at,
             )
-            _post_json(url, context.callback_audience, body.model_dump_json())
+            _post_json(
+                self._context.callback_url_progress,
+                self._context.callback_audience,
+                body.model_dump_json(),
+            )
         except Exception as exc:
             print(
                 f"purelms_itask_runtime: progress callback failed (non-fatal): {exc!r}",
                 file=sys.stderr,
             )
 
-    return emit
+
+def make_progress_reporter(
+    context: ExecutionContext,
+    started_at: float,
+    *,
+    milestones: tuple[int, ...] = DEFAULT_PROGRESS_MILESTONES,
+) -> ProgressReporter | None:
+    """Build a throttled backend reporter, or ``None`` for local sync runs.
+
+    Raw tool updates are quantized to 0/25/50/75/100 by default and time-
+    throttled using ``context.progress_min_interval_seconds``. Emission is
+    strictly best-effort so progress can never fail an otherwise-good run.
+    """
+    url = context.callback_url_progress
+    if not url.lower().startswith(_HTTP_PREFIXES):
+        return None
+    return ProgressReporter(
+        context=context,
+        started_at=started_at,
+        milestones=milestones,
+    )
 
 
 # ---------------------------------------------------------------------

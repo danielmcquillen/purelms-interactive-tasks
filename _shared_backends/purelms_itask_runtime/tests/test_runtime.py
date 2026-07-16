@@ -8,11 +8,13 @@ is exercised without credentials, a network, or a real bucket.
 from __future__ import annotations
 
 import io
+import json
 import urllib.error
 from uuid import uuid4
 
 import purelms_itask_runtime.runtime as rt
 import pytest
+from purelms_itask_runtime import ProgressReporter
 from purelms_itask_runtime import RuntimeLocation
 from purelms_itask_runtime import make_progress_reporter
 from purelms_itask_runtime import read_input_envelope
@@ -28,12 +30,18 @@ _COMPLETE_URL = "https://worker.example/api/v1/sims/internal/runs/abc/complete"
 _AUDIENCE = "https://worker.example"
 
 
-def _context(*, progress_url: str, complete_url: str) -> ExecutionContext:
+def _context(
+    *,
+    progress_url: str,
+    complete_url: str,
+    progress_min_interval_seconds: float = 2.0,
+) -> ExecutionContext:
     return ExecutionContext(
         callback_url_progress=progress_url,
         callback_url_complete=complete_url,
         callback_audience=_AUDIENCE,
         timeout_seconds=30,
+        progress_min_interval_seconds=progress_min_interval_seconds,
     )
 
 
@@ -185,8 +193,83 @@ def test_progress_reporter_posts_progress_callback(monkeypatch):
     url, audience, body = calls[0]
     assert url == _PROGRESS_URL
     assert audience == _AUDIENCE
-    assert '"progress_pct":42' in body.replace(" ", "")
+    assert '"progress_pct":25' in body.replace(" ", "")
     assert "Running" in body
+
+
+def test_progress_reporter_defaults_to_quarter_steps_and_minimum_interval(
+    monkeypatch,
+):
+    """Raw tool chatter becomes at most 0/25/50/75/100 over HTTP."""
+    bodies: list[dict] = []
+    monkeypatch.setattr(
+        rt,
+        "_post_json",
+        lambda _url, _audience, body: bodies.append(json.loads(body)),
+    )
+    now = [10.0]
+    ctx = _context(progress_url=_PROGRESS_URL, complete_url=_COMPLETE_URL)
+    reporter = ProgressReporter(
+        context=ctx,
+        started_at=5.0,
+        clock=lambda: now[0],
+    )
+
+    reporter(1, "starting")  # floors to 0 and emits immediately
+    reporter(24, "still starting")  # same milestone: no duplicate
+    now[0] = 10.5
+    reporter(25, "quarter")  # new milestone, but too soon
+    now[0] = 12.0
+    reporter(49, "quarter")  # pending quarter now emits
+    now[0] = 14.0
+    reporter(50, "half")
+    now[0] = 14.1
+    reporter(80, "three quarters")  # throttled by time
+    now[0] = 16.0
+    reporter(80, "three quarters")
+    now[0] = 16.1
+    reporter(100, "backend work complete")  # terminal milestone is immediate
+
+    assert [body["progress_pct"] for body in bodies] == [0, 25, 50, 75, 100]
+    assert bodies[0]["elapsed_seconds"] == 5.0
+    assert bodies[-1]["step"] == "backend work complete"
+
+
+def test_progress_reporter_accepts_backend_specific_milestones(monkeypatch):
+    """The quarter-step policy is a default, not a hard-coded limitation."""
+    bodies: list[dict] = []
+    monkeypatch.setattr(
+        rt,
+        "_post_json",
+        lambda _url, _audience, body: bodies.append(json.loads(body)),
+    )
+    ctx = _context(
+        progress_url=_PROGRESS_URL,
+        complete_url=_COMPLETE_URL,
+        progress_min_interval_seconds=0,
+    )
+    reporter = ProgressReporter(
+        context=ctx,
+        started_at=0,
+        milestones=(0, 10, 100),
+        clock=lambda: 1.0,
+    )
+
+    reporter(18, "custom")
+    reporter(100, "done")
+
+    assert [body["progress_pct"] for body in bodies] == [10, 100]
+
+
+def test_progress_reporter_rejects_invalid_milestones():
+    """Custom milestone sets must remain monotonic and cover the lifecycle."""
+    ctx = _context(progress_url=_PROGRESS_URL, complete_url=_COMPLETE_URL)
+    with pytest.raises(ValueError, match="span 0 to 100"):
+        ProgressReporter(
+            context=ctx,
+            started_at=0,
+            milestones=(0, 50, 50, 100),
+        )
 
 
 def test_progress_reporter_swallows_post_failures(monkeypatch):

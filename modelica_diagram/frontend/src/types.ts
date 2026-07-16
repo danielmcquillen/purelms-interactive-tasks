@@ -39,7 +39,7 @@ export interface SimulationRunMessage {
 export interface SimulationRunStatusResponse {
   id: string;
   status: string;
-  progress_pct: number;
+  progress_pct: number | null;
   progress_step: string;
   is_terminal: boolean;
   completed_at: string | null;
@@ -60,6 +60,7 @@ export interface PollHelperOptions {
 
 export interface ProgressBarController {
   readonly element: HTMLElement;
+  update(pct: number | null, label?: string): void;
   indeterminate(label?: string): void;
   determinate(pct: number, label?: string): void;
   complete(label?: string): void;
@@ -77,7 +78,7 @@ export interface MountHelpers {
   };
   escape(value: string): string;
   ui?: {
-    createProgressBar(): ProgressBarController;
+    createProgressBar?(): ProgressBarController;
     renderSubmissionError?(error: unknown): HTMLElement | null;
   };
   meta: {
@@ -85,6 +86,8 @@ export interface MountHelpers {
     unitBlockId: number;
     creditCost: number | null;
     backendAvailable: boolean | null;
+    progressReporting?: "none" | "percentage";
+    /** @deprecated Compatibility with older dispatcher bundles. */
     reportsProgress?: boolean;
   };
 }

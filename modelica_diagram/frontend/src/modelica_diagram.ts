@@ -28,6 +28,7 @@ import type {
   ModelicaOutputs,
   MountFn,
   MountHelpers,
+  ProgressBarController,
   RunReference,
   Scenario,
   SimulationRunMessage,
@@ -110,6 +111,7 @@ export const mount: MountFn = async (element, configRaw, helpers): Promise<void>
 
   const statusEl = el("div", "mdl-status");
   statusEl.setAttribute("aria-live", "polite");
+  const progressEl = el("div", "purelms-task-progress-host");
   const resultsEl = el("div", "mdl-results");
 
   sidebar.append(
@@ -117,6 +119,7 @@ export const mount: MountFn = async (element, configRaw, helpers): Promise<void>
     ...paramInputs.rows,
     toolbar,
     statusEl,
+    progressEl,
     resultsEl,
   );
 
@@ -127,7 +130,15 @@ export const mount: MountFn = async (element, configRaw, helpers): Promise<void>
     statusEl.textContent = "";
   });
   runBtn.addEventListener("click", () => {
-    void handleSubmit({ canvas, paramInputs, runBtn, statusEl, resultsEl, helpers });
+    void handleSubmit({
+      canvas,
+      paramInputs,
+      runBtn,
+      statusEl,
+      progressEl,
+      resultsEl,
+      helpers,
+    });
   });
 
   // Restore the learner's last attempt (diagram + last result). The sliders are
@@ -135,7 +146,12 @@ export const mount: MountFn = async (element, configRaw, helpers): Promise<void>
   restoreLastRun(config.last_run, canvas, statusEl, resultsEl);
   if (config.last_run?.run && !isTerminalStatus(config.last_run.run.status)) {
     runBtn.disabled = true;
-    void pollRun(config.last_run.run, { runBtn, statusEl, resultsEl, helpers });
+    const ui = prepareRunUi(statusEl, progressEl, helpers);
+    void pollRun(
+      config.last_run.run,
+      { runBtn, statusEl, progressEl, resultsEl, helpers },
+      ui,
+    );
   } else if (
     config.last_run?.run &&
     isTerminalStatus(config.last_run.run.status) &&
@@ -239,6 +255,7 @@ interface SubmitArgs {
   paramInputs: ParamInputs;
   runBtn: HTMLButtonElement;
   statusEl: HTMLElement;
+  progressEl: HTMLElement;
   resultsEl: HTMLElement;
   helpers: MountHelpers;
 }
@@ -260,7 +277,9 @@ async function handleSubmit(args: SubmitArgs): Promise<void> {
 
   runBtn.disabled = true;
   resultsEl.replaceChildren();
-  setStatus("Submitting…");
+  const ui = prepareRunUi(statusEl, args.progressEl, helpers);
+  ui.setStatus("Submitting…");
+  ui.bar?.indeterminate("Submitting…");
 
   const parameters = {
     scenario: SCENARIO.id,
@@ -277,49 +296,88 @@ async function handleSubmit(args: SubmitArgs): Promise<void> {
     if (alertEl) {
       resultsEl.replaceChildren(alertEl);
     } else {
-      setStatus(`Submission failed: ${humanize(err)}`);
+      ui.setStatus(`Submission failed: ${humanize(err)}`);
     }
+    ui.bar?.error("Submission failed");
     runBtn.disabled = false;
     return;
   }
 
   if (!outcome.run) {
-    setStatus("Run complete.");
+    ui.setStatus("Run complete.");
+    ui.bar?.complete("Run complete");
     runBtn.disabled = false;
     return;
   }
 
-  await pollRun(outcome.run, { runBtn, statusEl, resultsEl, helpers });
+  await pollRun(outcome.run, args, ui);
 }
 
 interface PollRunArgs {
   runBtn: HTMLButtonElement;
   statusEl: HTMLElement;
+  progressEl: HTMLElement;
   resultsEl: HTMLElement;
   helpers: MountHelpers;
 }
 
-async function pollRun(run: RunReference, args: PollRunArgs): Promise<void> {
-  const { runBtn, statusEl, resultsEl, helpers } = args;
-  const setStatus = (text: string): void => {
-    statusEl.textContent = text;
+interface RunUi {
+  bar: ProgressBarController | null;
+  setStatus(text: string): void;
+}
+
+function prepareRunUi(
+  statusEl: HTMLElement,
+  progressEl: HTMLElement,
+  helpers: MountHelpers,
+): RunUi {
+  const bar = helpers.ui?.createProgressBar?.() ?? null;
+  const setRunStatus = (text: string): void => {
+    if (!bar) statusEl.textContent = text;
   };
-  setStatus(activeStatusText(run.status));
+  if (bar) {
+    statusEl.hidden = true;
+    statusEl.textContent = "";
+    progressEl.replaceChildren(bar.element);
+  } else {
+    statusEl.hidden = false;
+  }
+  return { bar, setStatus: setRunStatus };
+}
+
+async function pollRun(
+  run: RunReference,
+  args: PollRunArgs,
+  ui: RunUi,
+): Promise<void> {
+  const { runBtn, resultsEl, helpers } = args;
+  ui.setStatus(activeStatusText(run.status));
+  ui.bar?.update(null, activeStatusText(run.status));
   try {
     for await (const status of helpers.api.pollStatus(run.id, {
       intervalSeconds: run.poll_interval_seconds || 1,
       deadlineAt: run.deadline_at,
     })) {
       if (status.is_terminal) {
-        renderResult(status, resultsEl, setStatus);
+        renderResult(status, resultsEl, ui.setStatus);
+        if (status.status === "success") {
+          ui.bar?.complete(`Done (${(status.runtime_seconds ?? 0).toFixed(2)}s)`);
+        } else {
+          ui.bar?.error("Run could not complete");
+        }
         break;
       }
-      setStatus(
-        activeStatusText(status.status, status.progress_pct, status.progress_step),
+      const label = activeStatusText(
+        status.status,
+        status.progress_pct,
+        status.progress_step,
       );
+      ui.setStatus(label);
+      ui.bar?.update(status.progress_pct, status.progress_step || label);
     }
   } catch (err) {
-    setStatus(`We lost contact with this run: ${humanize(err)}`);
+    ui.setStatus(`We lost contact with this run: ${humanize(err)}`);
+    ui.bar?.error("Run could not complete");
   } finally {
     runBtn.disabled = false;
   }
@@ -348,13 +406,19 @@ function renderResult(
   );
 }
 
-function activeStatusText(status: string, progressPct = 0, progressStep = ""): string {
+function activeStatusText(
+  status: string,
+  progressPct: number | null = null,
+  progressStep = "",
+): string {
   if (isTerminalStatus(status)) return "Loading the completed result…";
   if (status === "pending") return "Preparing your simulation…";
   if (status === "dispatched") {
     return "Starting the simulation environment… The first run can take a minute.";
   }
-  const progress = progressPct > 0 ? ` (${progressPct}%)` : "";
+  const progress = typeof progressPct === "number" && progressPct > 0
+    ? ` (${progressPct}%)`
+    : "";
   const step = progressStep ? ` — ${progressStep}` : "";
   return `Simulation is running${progress}${step}…`;
 }

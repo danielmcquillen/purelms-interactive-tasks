@@ -67,15 +67,17 @@ def main() -> int:
     )
 
     # Optional progress reporting. ``on_progress`` is None on the local
-    # sync path (no endpoint to POST to), so guard before calling. On the
-    # async path, calling it at phase boundaries drives a determinate
-    # progress bar in the learner's browser.
+    # sync path (no endpoint to POST to), so guard before calling. Declare
+    # ``progress_reporting: percentage`` only when these values measure real
+    # work. The shared reporter floors noisy tool updates to 0/25/50/75/100
+    # and applies the LMS-provided minimum callback interval by default.
     on_progress = make_progress_reporter(envelope.context, started_at)
     if on_progress:
         on_progress(0, "starting")
 
-    # 2. TODO: domain work goes here. Call ``on_progress(pct, step)`` at
-    #    phase boundaries if your run is long. Populate ``outputs`` with
+    # 2. TODO: domain work goes here. Feed genuine raw tool percentages to
+    #    ``on_progress(pct, step)``; do not manufacture time-based progress.
+    #    Populate ``outputs`` with
     #    values matching your manifest's ``outputs:`` block.
     outputs: dict[str, object] = {
         # "annual_heating_kWh": 1234.5,

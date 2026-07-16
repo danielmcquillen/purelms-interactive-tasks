@@ -16,7 +16,7 @@
 
 // Inline type definitions for the dispatcher contract. At v1 we
 // vendor these rather than publishing a shared @purelms/types
-// package — when a second backend exists we'll extract.
+// package so each versioned bundle remains self-contained.
 
 interface RunReference {
   id: string;
@@ -36,7 +36,7 @@ interface SubmissionOutcomeResponse {
 interface RunStatusResponse {
   id: string;
   status: string;
-  progress_pct: number;
+  progress_pct: number | null;
   progress_step: string;
   is_terminal: boolean;
   completed_at: string | null;
@@ -49,13 +49,30 @@ interface PollOptions {
   deadlineAt?: string | null;
 }
 
+interface ProgressBarController {
+  readonly element: HTMLElement;
+  update(pct: number | null, label?: string): void;
+  indeterminate(label?: string): void;
+  determinate(pct: number, label?: string): void;
+  complete(label?: string): void;
+  error(label?: string): void;
+  remove(): void;
+}
+
 interface MountHelpers {
   api: {
     submit(parameters: Record<string, unknown>): Promise<SubmissionOutcomeResponse>;
     pollStatus(runId: string, options?: PollOptions): AsyncIterable<RunStatusResponse>;
   };
   escape(value: string): string;
-  meta: { bundle: string; unitBlockId: number };
+  ui: {
+    createProgressBar(): ProgressBarController;
+  };
+  meta: {
+    bundle: string;
+    unitBlockId: number;
+    progressReporting: "none" | "percentage";
+  };
 }
 
 export async function mount(

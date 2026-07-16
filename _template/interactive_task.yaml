@@ -22,6 +22,10 @@ backend:
   # v1 accepts only "sync". Cloud Run/GCS transport already works through the
   # shared runtime; this field does not select the deployment transport.
   execution_mode: sync
+  # none: animated indeterminate bar. percentage: genuine 0-100 callbacks.
+  # If percentage, the backend must throttle tool updates; the shared runtime
+  # emits only 0/25/50/75/100 milestones by default.
+  progress_reporting: none
   default_timeout_seconds: 60
 
 # REQUIRED: frontend deploy metadata
