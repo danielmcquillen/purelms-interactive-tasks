@@ -110,9 +110,18 @@ Cloud Run deployment is separate from publishing:
 
 ```bash
 # Run from purelms/ after sourcing its GCP operator configuration.
+just backends stage-bundles v0.2.4
+git add purelms/static/backends
+git commit -m "build(simulations): stage v0.2.4 frontend bundles"
+just gcp deploy-all prod
 just backends deploy energyplus_single_zone prod
 just backends deploy-all prod
 ```
+
+The staging step builds frontend bundles from the exact signed tag and copies
+them into PureLMS's tracked static tree. The LMS must be committed and deployed
+before the matching backend release can be registered; backend deploys verify
+this ordering against the live Django image.
 
 `deploy` resolves the default `v<pyproject version>` tag to its Artifact
 Registry digest and deploys `IMAGE@sha256:...`; the Cloud Run Job never points
