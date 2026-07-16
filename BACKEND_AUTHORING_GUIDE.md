@@ -163,8 +163,8 @@ backend:
 | Field | Purpose | Validation |
 |---|---|---|
 | `image` | Container image URI. **Optional.** If absent, the installer derives `<registry>/purelms-itask-<slug-with-hyphens>:<version>` using the `--registry` flag's value. Set this explicitly only when your registry has an unusual layout. | Free-form string |
-| `credit_cost` | Compute credits debited per submission. Refunded on `FAILED_RUNTIME`; kept on `FAILED_SIMULATION`. Zero means free runs. | Non-negative integer |
-| `trust_tier` | Friendly form. Mapped at install time to `SimulationTrustTier` enum: `platform` → `TIER_1_PLATFORM`, `verified` → `TIER_2_VERIFIED`, `community` → `TIER_3_COMMUNITY`. Drives whether evidence can flow into credentials. See [Trust tiers](#trust-tiers--execution-mode) below. | One of the three values |
+| `credit_cost` | Compute credits debited per accepted run. Refunded on `FAILED_RUNTIME`, `TIMED_OUT`, or `CANCELLED`; kept on `FAILED_SIMULATION`. Zero means free runs. | Non-negative integer |
+| `trust_tier` | Friendly form. Mapped at install time to `SimulationTrustTier`: `platform` → tier 1, `verified` → tier 2, `community` → tier 3. Only tier 1 is currently launchable. | One of the three values |
 | `execution_mode` | v1 accepts ONLY `"sync"`; `"async"` returns an install error. This field is a future per-task routing declaration—not the transport used by a deployment. The shipped Cloud Run Jobs path already runs these containers asynchronously through GCS and callbacks. | `"sync"` |
 | `default_timeout_seconds` | Wall-clock budget per run. Container is hard-killed after this. | Positive integer |
 | `default_memory_limit` | Container memory cap (Cloud Run / k8s syntax: `"2Gi"`, `"512Mi"`). | String |
@@ -177,7 +177,7 @@ frontend:
   bundle: my_task.js       # filename inside frontend/dist/ after esbuild
 ```
 
-`bundle` is the filename the LMS dispatcher will dynamic-import from `/static/backends/<slug>/<bundle>`. It must exist in `frontend/dist/` after `npm run build` (or `just frontend-build <slug>`).
+`bundle` is the filename the LMS dispatcher will dynamic-import from `/static/backends/<slug>/<version>/<bundle>`. It must exist in `frontend/dist/` after `npm run build` (or `just frontend-build <slug>`). The versioned path prevents a new release from replacing the UI for an older pinned block.
 
 ### Parameters (Layer 1 schema)
 
@@ -289,12 +289,10 @@ The v1 allowed set is exactly these seven fields (matches `purelms_shared.envelo
 
 This is the declarative interface that lets course authors say "passing = `annual_heating_kWh < 10000`" without your container caring about pass/fail semantics — the LMS computes the grade from your outputs.
 
-**Status: shipped (2026-05-29).** Both halves now work:
+- **At install time**, the installer validates that every `outputs.NAME` referenced by a rule corresponds to a declared output in your manifest. Dangling references fail the install.
+- **At completion time**, `_on_run_succeeded` evaluates the rules against your backend's `outputs` and writes the standardized `(passed, score, completion)` triple onto the learner's `InteractiveTaskAttempt`. A `passed` rule that fails records `success_status=FAILED` even on a `SUCCESS` envelope.
 
-- ✅ **At install time**, the installer validates that every `outputs.NAME` referenced by a rule corresponds to a declared output in your manifest. Dangling references fail the install.
-- ✅ **At completion time**, `_on_run_succeeded` evaluates the rules against your backend's `outputs` and writes the standardized `(passed, score, completion)` triple onto the learner's `InteractiveTaskAttempt`. A `passed` rule that fails records `grade_status=FAILED` even on a `SUCCESS` envelope.
-
-**If you omit `lms_outcomes` (or set it to `{}`), you get the MVP-A fallback:** `status == SUCCESS → passed = true, completion = 1.0, score = null`. Use explicit rules when domain outputs determine success; the shipped EnergyPlus and Modelica tasks are examples. The fallback remains useful for open-schema utilities such as `echo`.
+**If you omit `lms_outcomes` (or set it to `{}`), the default is:** `status == SUCCESS → passed = true, completion = 1.0, score = null`. Use explicit rules when domain outputs determine success; EnergyPlus and Modelica are examples. The default remains useful for open-schema utilities such as Echo.
 
 Rule shape — each standard outcome field (`passed` / `score` / `completion`) maps to a `{source, transform, ...args}` rule:
 
@@ -310,7 +308,7 @@ lms_outcomes:
     bounds: [2000, 10000]
 ```
 
-Transforms: `passthrough`, `equals` (`value`), `less_than` / `greater_than` (`threshold`), `in_range` (`bounds: [min, max]`) → bool; `normalize` / `normalize_inverse` (`bounds: [min, max]`) → 0.0-1.0 float. A rule referencing a missing output falls back to that field's MVP-A default at runtime (and the install-time check catches the common dangling-reference typo).
+Transforms: `passthrough`, `equals` (`value`), `less_than` / `greater_than` (`threshold`), `in_range` (`bounds: [min, max]`) → bool; `normalize` / `normalize_inverse` (`bounds: [min, max]`) → 0.0-1.0 float. A configured `passed` rule that cannot be evaluated fails closed; score/completion remain best-effort. Install-time validation catches the common dangling-reference typo.
 
 (If you still want backend-side pass/fail — e.g. for logic the rule transforms can't express — emit `OutputStatus.FAILED_SIMULATION` from the container; note the credit is NOT refunded on FAILED_SIMULATION, since the learner used the compute.)
 
@@ -476,10 +474,10 @@ sys.exit(0)
 
 | Value | When to use |
 |---|---|
-| `SUCCESS` | The run completed and produced meaningful outputs. The LMS then evaluates your manifest's `lms_outcomes` rules against the outputs to set `grade_status`. With `lms_outcomes: {}` (the default), `SUCCESS` maps to `PASSED` (MVP-A). With a `passed` rule, a `SUCCESS` run whose outputs miss the threshold records `FAILED`. |
+| `SUCCESS` | The run completed and produced meaningful outputs. The LMS evaluates `lms_outcomes` to set `success_status`. With empty rules, `SUCCESS` maps to `PASSED`; with a `passed` rule, outputs that miss the criterion record `FAILED`. |
 | `FAILED_SIMULATION` | The run completed but the simulation said "you got the wrong answer" — credit is kept, learner sees the outputs + messages. |
-| `FAILED_RUNTIME` | The simulation crashed (bad IDF, divergent solver, exception). Credit is **refunded**. |
-| `CANCELLED` | The run was cancelled (operator action or learner-initiated). |
+| `FAILED_RUNTIME` | The backend implementation or platform failed. Credit is **refunded**. Learner-correctable domain/model errors belong in `FAILED_SIMULATION`. |
+| `CANCELLED` | The run was cancelled. Credit is refunded. |
 | `TIMED_OUT` | Exceeded `default_timeout_seconds`. Credit refunded. |
 
 ### `Message` for surfacing learner-facing info
@@ -838,7 +836,7 @@ Four management commands drive an InteractiveTask's lifecycle. All live in `pure
 uv run python manage.py install_interactive_task ../purelms-interactive-tasks/my_task
 ```
 
-Reads `my_task/interactive_task.yaml`, validates against the v1 schema, computes derived fields (`default_placement_config`, manifest sha256, image URI), writes / updates the `SimulationBackendRegistration` row per the install behavior table, and stages the frontend bundle into `purelms/static/backends/<slug>/`.
+Reads `my_task/interactive_task.yaml`, validates against the v1 schema, computes derived fields (`default_placement_config`, manifest sha256, image URI), writes or updates the `SimulationBackendRegistration` row, and stages the frontend bundle into `purelms/static/backends/<slug>/<version>/`.
 
 **Useful flags:**
 
@@ -1016,19 +1014,19 @@ just smoke-all              # every backend's real domain runtime
 **How to pick:**
 
 - **`platform`** — only for InteractiveTasks the PureLMS team maintains directly (echo, EnergyPlus single-zone, the canonical ports).
-- **`verified`** — a contributor InteractiveTask after PureLMS-side review. Same evidence path as platform; lifecycle is `community` → review → `verified`.
-- **`community`** — anything else. Safe default for new contributions. Course authors can use it freely; evidence from it won't satisfy credential-bearing goals.
+- **`verified`** — a contributor task under review. It can be registered but is not currently launchable.
+- **`community`** — unverified metadata. It is not launchable and can never satisfy learner evidence or credential-bearing goals.
 
 When promoting from `community` → `verified`, bump the manifest version and re-install with `--replace-active`. The promotion is auditable because every registration row carries `manifest_sha256` + `manifest_yaml`.
 
 ### Execution mode
 
-The manifest still accepts only `execution_mode: sync` at install (the install command rejects `async`). What that gates is the **manifest-declared per-task async router** — *not* whether async infrastructure exists.
+The manifest accepts only `execution_mode: sync` at install. This describes the container invocation contract, not whether the deployment launches it asynchronously.
 
 Two things are easy to conflate:
 
-- **The async deployment path has shipped.** On a Cloud Run Jobs deploy the worker stages the envelope to GCS, launches the container with `PURELMS_INPUT_URI` / `PURELMS_OUTPUT_URI`, and waits for the `/complete` callback — and `purelms_itask_runtime` (which the template + every backend already use) handles the GCS I/O + the progress/`complete` callbacks for you. So your container is *already* async-ready; you don't write callback code.
-- **What's still future** is letting a *manifest* declare `execution_mode: async` so a single deployment routes some tasks sync and others async per their declaration. Until that ships, `sync` is the only accepted manifest value.
+- On Cloud Run Jobs, the LMS stages input, grants signed input/output object capabilities, launches the container, and waits for `/complete`.
+- `purelms_itask_runtime` handles signed object I/O, output verification, and OIDC progress/completion callbacks. Task code does not write callback or GCS-client logic.
 
 For now, declare `sync` and design every execution to fit inside `default_timeout_seconds`. The deployment chooses local Docker or asynchronous Cloud Run Jobs independently of this manifest field.
 

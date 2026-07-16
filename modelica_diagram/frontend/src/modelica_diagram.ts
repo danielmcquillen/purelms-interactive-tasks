@@ -95,7 +95,7 @@ export const mount: MountFn = async (element, configRaw, helpers): Promise<void>
   }
 
   // ---- Parameter sliders ----
-  const paramInputs = buildParams(config);
+  const paramInputs = buildParams(config, helpers.meta.unitBlockId);
 
   // ---- Toolbar + status + results ----
   const toolbar = el("div", "mdl-toolbar");
@@ -147,7 +147,7 @@ interface ParamInputs {
   reset(): void;
 }
 
-function buildParams(config: ModelicaConfig): ParamInputs {
+function buildParams(config: ModelicaConfig, unitBlockId: number): ParamInputs {
   const rows: HTMLElement[] = [];
   const inputs = new Map<ParamKey, HTMLInputElement>();
   const resets: Array<() => void> = [];
@@ -165,14 +165,15 @@ function buildParams(config: ModelicaConfig): ParamInputs {
 
     const row = el("div", "mdl-field");
     const label = el("label");
-    label.htmlFor = `mdl-${key}`;
+    const inputId = `mdl-${unitBlockId}-${key}`;
+    label.htmlFor = inputId;
     const labelText = el("span");
     labelText.textContent = spec.label;
     const valueText = el("span", "mdl-val");
     label.append(labelText, valueText);
 
     const input = el("input");
-    input.id = `mdl-${key}`;
+    input.id = inputId;
     input.type = "range";
     input.min = String(min);
     input.max = String(max);
@@ -281,6 +282,7 @@ async function handleSubmit(args: SubmitArgs): Promise<void> {
   try {
     for await (const status of helpers.api.pollStatus(outcome.run.id, {
       intervalSeconds: outcome.run.poll_interval_seconds || 1,
+      deadlineAt: outcome.run.deadline_at,
     })) {
       if (status.is_terminal) {
         renderResult(status, resultsEl, setStatus);

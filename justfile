@@ -57,8 +57,8 @@ _stage-shared-wheel slug shared_path=env_var_or_default("PURELMS_SHARED_PATH", "
     # Also stage the in-repo shared backend-runtime wheel (local-dir vs
     # GCS envelope I/O + progress/complete worker callbacks). The
     # Dockerfile installs ``purelms-itask-runtime[cloud]`` from _vendor/,
-    # which pulls the purelms-shared wheel staged above + google-cloud-
-    # storage / google-auth from PyPI.
+    # which pulls the purelms-shared wheel staged above plus google-auth
+    # for callback OIDC tokens. Object I/O uses signed HTTPS URLs.
     cd "{{ justfile_directory() }}/_shared_backends/purelms_itask_runtime" && uv build --wheel --out-dir "{{ justfile_directory() }}/{{ slug }}/backend/_vendor"
 
 # Build the container image for one InteractiveTask.
@@ -132,9 +132,9 @@ push slug image_tag="": (publish slug image_tag)
 # Deploy one released backend as a digest-pinned, stage-specific Cloud Run Job.
 #
 # This recipe creates a dedicated least-privilege runtime service account per
-# stage, grants it object access only on the private simulation bucket and
-# run.invoker on the worker, then grants the Django runtime SA permission to
-# execute this Job with per-run env overrides and read execution metadata.
+# stage, grants it only run.invoker on the worker, then grants the Django
+# runtime SA permission to execute this Job with per-run env overrides and read
+# execution metadata. Per-run signed URLs replace backend bucket permissions.
 #
 # The tag is only a human-friendly selector. It is resolved through Artifact
 # Registry and the Job is deployed with IMAGE@sha256:DIGEST.
@@ -220,12 +220,12 @@ deploy slug stage image_tag="": (_check-slug slug)
             --project="${GCP_PROJECT_ID}"
     fi
 
-    echo "Granting ${BACKEND_SA_NAME} access to gs://${SIMULATION_BUCKET}..."
-    retry_gcloud gcloud storage buckets add-iam-policy-binding "gs://${SIMULATION_BUCKET}" \
+    echo "Removing legacy bucket access from ${BACKEND_SA_NAME}..."
+    gcloud storage buckets remove-iam-policy-binding "gs://${SIMULATION_BUCKET}" \
         --member="serviceAccount:${BACKEND_SA}" \
         --role="roles/storage.objectUser" \
         --project="${GCP_PROJECT_ID}" \
-        --quiet >/dev/null
+        --quiet >/dev/null 2>&1 || true
 
     echo "Deploying ${JOB_NAME} with ${PINNED_IMAGE}..."
     retry_gcloud gcloud run jobs deploy "${JOB_NAME}" \
@@ -284,8 +284,19 @@ deploy slug stage image_tag="": (_check-slug slug)
         exit 1
     fi
 
+    STORAGE_ROLE=$(gcloud storage buckets get-iam-policy "gs://${SIMULATION_BUCKET}" \
+        --project="${GCP_PROJECT_ID}" \
+        --flatten="bindings[].members" \
+        --filter="bindings.role=roles/storage.objectUser AND bindings.members=serviceAccount:${BACKEND_SA}" \
+        --format="value(bindings.role)")
+    if [ -n "${STORAGE_ROLE}" ]; then
+        echo "✗ ${BACKEND_SA} still has bucket access; signed object URLs require none."
+        exit 1
+    fi
+
     echo "✓ ${JOB_NAME} deployed at ${PINNED_IMAGE}"
     echo "✓ Callback IAM and Django identity agree on ${BACKEND_SA}"
+    echo "✓ Backend identity has no simulation-bucket role"
 
 # Deploy every released backend image at the same repository release tag.
 deploy-all stage image_tag="":
@@ -320,7 +331,7 @@ status slug stage="prod": (_check-slug slug)
 # Operators copy this to PureLMS's static dir via the LMS's
 # `manage.py install_interactive_task` (or `collect_backend_bundles`
 # for ad-hoc staging). Convention:
-# purelms/static/backends/<slug>/<slug>.js
+# Build the manifest-declared bundle; the LMS collector stages it by slug/version.
 frontend-build slug:
     cd {{ slug }}/frontend && npm run build
 
@@ -353,7 +364,7 @@ test slug:
     cd {{ slug }}/backend && uv run pytest
     cd {{ slug }}/frontend && npm test
 
-# Test the shared local-directory / Cloud Run-GCS runtime contract.
+# Test the shared local-directory / signed-object runtime contract.
 test-runtime:
     cd _shared_backends/purelms_itask_runtime && uv run --extra dev pytest
 

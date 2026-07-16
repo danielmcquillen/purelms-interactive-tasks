@@ -361,5 +361,5 @@ def test_deploy_retries_new_service_account_propagation() -> None:
     assert "max_attempts=7" in recipe
     assert "delay=$((delay * 2))" in recipe
     assert 'if [ "${delay}" -gt 30 ]; then delay=30; fi' in recipe
-    assert "retry_gcloud gcloud storage buckets add-iam-policy-binding" in recipe
     assert "retry_gcloud gcloud run jobs deploy" in recipe
+    assert "retry_gcloud gcloud run services add-iam-policy-binding" in recipe

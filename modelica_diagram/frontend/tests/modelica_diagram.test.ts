@@ -89,7 +89,14 @@ function makeHelpers(overrides: Partial<MountHelpers> = {}): MountHelpers {
       submit: vi.fn(
         async (): Promise<SubmissionOutcomeResponse> => ({
           attempt: null,
-          run: { id: "r1", status: "running", status_url: "", poll_interval_seconds: 1 },
+          run: {
+            id: "r1",
+            status: "running",
+            status_url: "",
+            poll_interval_seconds: 1,
+            websocket_url: null,
+            deadline_at: null,
+          },
           is_complete: false,
         }),
       ),
@@ -118,6 +125,22 @@ describe("mount", () => {
     expect(host.querySelectorAll(".mdl-palette button")).toHaveLength(4);
     expect(host.querySelectorAll(".mdl-field input[type=range]")).toHaveLength(4);
     expect(host.querySelector(".mdl-run")).not.toBeNull();
+  });
+
+  it("scopes slider IDs to the placement", async () => {
+    exportFn.mockReturnValue(emptyExport());
+    const first = document.createElement("div");
+    const second = document.createElement("div");
+    await mount(first, {}, makeHelpers());
+    await mount(
+      second,
+      {},
+      makeHelpers({ meta: { ...makeHelpers().meta, unitBlockId: 8 } }),
+    );
+
+    const ids = [...first.querySelectorAll("[id]"), ...second.querySelectorAll("[id]")]
+      .map((node) => node.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it("shows the unavailable notice when the backend is deactivated", async () => {

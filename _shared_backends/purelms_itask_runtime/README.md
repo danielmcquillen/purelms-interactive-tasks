@@ -5,10 +5,10 @@ Shared runtime helper for PureLMS InteractiveTask **backend containers**.
 A backend container is launched two ways and must satisfy the same
 contract in both:
 
-| | Local / sync (`DockerComposeExecutionBackend`) | Async / GCS (`CloudRunJobsExecutionBackend`) |
+| | Local / sync (`DockerComposeExecutionBackend`) | Async / signed object (`CloudRunJobsExecutionBackend`) |
 |---|---|---|
-| Input | `PURELMS_INPUT_DIR/input.json` (mounted) | `PURELMS_INPUT_URI` (`gs://…`) |
-| Output | `PURELMS_OUTPUT_DIR/output.json` (mounted) | upload to `PURELMS_OUTPUT_URI` |
+| Input | `PURELMS_INPUT_DIR/input.json` (mounted) | GET `PURELMS_INPUT_FETCH_URL` |
+| Output | `PURELMS_OUTPUT_DIR/output.json` (mounted) | PUT `PURELMS_OUTPUT_UPLOAD_URL`, then GET `PURELMS_OUTPUT_VERIFY_URL` |
 | Progress | none (worker can't observe mid-run) | POST `ProgressCallback` |
 | Completion | worker reads `output.json` off disk | POST `CompleteCallback` (authoritative) |
 
@@ -36,22 +36,21 @@ sentinel) — a backend never branches on "am I local or cloud".
 
 On Cloud Run, the worker also supplies `PURELMS_INPUT_SHA256`,
 `PURELMS_INPUT_SIZE_BYTES`, and `PURELMS_INPUT_GENERATION`. The runtime reads
-the exact GCS generation with a size limit, then verifies its digest and byte
-count before parsing. Local runs may omit all three. A partial or inconsistent
-identity is a configuration error, not a best-effort fallback.
+the exact signed object with a size limit, then verifies its digest and byte
+count before parsing. The canonical `gs://` URIs are retained only for callback
+and evidence identity. Local runs may omit all cloud fields.
 
 ## Extras
 
-`google-cloud-storage` + `google-auth` are needed ONLY on the async /
-Cloud Run image (GCS I/O + OIDC-authed callbacks). They live under the
+`google-auth` is needed only on the async Cloud Run image for OIDC-authenticated
+callbacks. It lives under the
 `cloud` extra and are imported lazily + guarded, so the local/dev path
 runs without them. The deployed image installs
 `purelms-itask-runtime[cloud]`.
 
 ## Why it lives in `_shared_backends/`
 
-Per the backend contract, "shared utilities (callback client, envelope
-loader, GCS helpers)" belong here once a second backend wants them —
+Per the backend contract, shared callback and envelope helpers belong here —
 `echo`, `energyplus_single_zone`, and `modelica_diagram` are wired to it. It is a uv
 workspace member; container builds vendor its wheel into
 `<slug>/backend/_vendor/`. Local builds also stage the sibling

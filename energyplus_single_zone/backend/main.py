@@ -63,7 +63,7 @@ def main() -> int:
     print(
         f"energyplus_single_zone: run_id={location.run_id} "
         f"backend={envelope.backend_slug}@{envelope.backend_version} "
-        f"parameters={envelope.parameters!r}",
+        f"parameter_keys={sorted(envelope.parameters)}",
     )
 
     # 2. Run the domain code. Catch validation errors + surface them via

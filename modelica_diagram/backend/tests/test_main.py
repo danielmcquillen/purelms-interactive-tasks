@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -88,3 +89,26 @@ def test_output_round_trips_as_envelope(workspace):
     raw = (output_dir / "output.json").read_text()
     envelope = SimulationOutputEnvelope.model_validate_json(raw)
     assert envelope.status.value == "success"
+
+
+def test_fmu_failure_writes_failed_runtime_envelope(workspace, monkeypatch):
+    """A solver failure must close as platform failure, never false success."""
+    input_dir, output_dir = workspace
+    _write_input(input_dir, {"scenario": "hydronic_loop", "diagram_json": "{}"})
+    monkeypatch.setattr(
+        main,
+        "grade_diagram",
+        lambda *_args: SimpleNamespace(topology_correct=True, messages=[]),
+    )
+    monkeypatch.setattr(
+        main,
+        "run_fmu",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            main.FmuRunError("solver failed"),
+        ),
+    )
+
+    assert main.main() == 0
+    out = json.loads((output_dir / "output.json").read_text())
+    assert out["status"] == "failed_runtime"
+    assert any(message["code"] == "FMU_RUNTIME" for message in out["messages"])

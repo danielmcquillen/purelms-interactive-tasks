@@ -3,8 +3,7 @@ Per-backend runtime self-description for the EnergyPlus single-zone
 InteractiveTask.
 
 Informational only—the LMS reads ``interactive_task.yaml`` as the source of
-truth. Keep this file synchronized for operator inspection and future
-automated drift detection.
+truth. Keep this file synchronized for release/operator inventory.
 """
 
 BACKEND_TYPE = "ENERGYPLUS_SINGLE_ZONE"

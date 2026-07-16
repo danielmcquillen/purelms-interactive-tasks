@@ -165,6 +165,7 @@ export const mount: MountFn = async (
   const { formEl, valueDisplays, inputs, submitButton } = buildForm({
     config,
     params,
+    idPrefix: `purelms-${helpers.meta.unitBlockId}`,
     onChange: (next) => {
       params.glazing_u_value = next.glazing_u_value;
       params.window_area = next.window_area;
@@ -228,10 +229,11 @@ interface FormElements {
 interface BuildFormArgs {
   config: EnergyPlusConfig;
   params: ParameterState;
+  idPrefix: string;
   onChange: (next: ParameterState) => void;
 }
 
-function buildForm({ config, params, onChange }: BuildFormArgs): FormElements {
+function buildForm({ config, params, idPrefix, onChange }: BuildFormArgs): FormElements {
   const formEl = document.createElement("form");
   formEl.noValidate = true;
   formEl.style.cssText = "display: flex; flex-direction: column; gap: 14px;";
@@ -261,6 +263,7 @@ function buildForm({ config, params, onChange }: BuildFormArgs): FormElements {
     bounds: uvalueBounds,
     visible: uvalueVisible,
     enabled: uvalueEnabled,
+    id: `${idPrefix}-glazing-u-value`,
   });
 
   // ---- Window area slider ----
@@ -275,6 +278,7 @@ function buildForm({ config, params, onChange }: BuildFormArgs): FormElements {
     bounds: areaBounds,
     visible: areaVisible,
     enabled: areaEnabled,
+    id: `${idPrefix}-window-area`,
   });
 
   // ---- Climate zone dropdown ----
@@ -291,6 +295,7 @@ function buildForm({ config, params, onChange }: BuildFormArgs): FormElements {
     choices: climateChoices,
     visible: climateVisible,
     enabled: climateEnabled,
+    id: `${idPrefix}-climate-zone`,
   });
 
   // ---- Submit button ----
@@ -341,6 +346,7 @@ interface NumberSliderRowArgs {
   bounds: { min: number; max: number; step: number };
   visible: boolean;
   enabled: boolean;
+  id: string;
 }
 
 interface NumberSliderRowResult {
@@ -357,7 +363,7 @@ function buildNumberSliderRow(args: NumberSliderRowArgs): NumberSliderRowResult 
   }
 
   const labelEl = document.createElement("label");
-  labelEl.htmlFor = `purelms-${args.name}`;
+  labelEl.htmlFor = args.id;
   labelEl.style.cssText =
     "display: flex; justify-content: space-between; font-weight: 600; font-size: 14px;";
 
@@ -371,7 +377,7 @@ function buildNumberSliderRow(args: NumberSliderRowArgs): NumberSliderRowResult 
   labelEl.append(labelText, valueEl);
 
   const inputEl = document.createElement("input");
-  inputEl.id = `purelms-${args.name}`;
+  inputEl.id = args.id;
   inputEl.type = "range";
   inputEl.min = String(args.bounds.min);
   inputEl.max = String(args.bounds.max);
@@ -401,6 +407,7 @@ interface EnumSelectRowArgs {
   choices: EnumChoice[];
   visible: boolean;
   enabled: boolean;
+  id: string;
 }
 
 interface EnumSelectRowResult {
@@ -416,12 +423,12 @@ function buildEnumSelectRow(args: EnumSelectRowArgs): EnumSelectRowResult {
   }
 
   const labelEl = document.createElement("label");
-  labelEl.htmlFor = `purelms-${args.name}`;
+  labelEl.htmlFor = args.id;
   labelEl.textContent = args.label;
   labelEl.style.cssText = "font-weight: 600; font-size: 14px;";
 
   const selectEl = document.createElement("select");
-  selectEl.id = `purelms-${args.name}`;
+  selectEl.id = args.id;
   selectEl.disabled = !args.enabled;
   selectEl.style.cssText = "padding: 6px; font-size: 14px;";
 
@@ -549,44 +556,16 @@ async function handleSubmit({
     return;
   }
 
-  if (outcome.is_complete || outcome.run === null) {
-    // Synchronous backend (e.g. DockerCompose locally): the outcome
-    // carries the terminal state already. The request blocked until
-    // the run finished, so the browser never saw a midpoint — an
-    // indeterminate bar is the honest choice regardless of whether
-    // the backend declares it reports progress. The API surface
-    // doesn't always include the outputs on the outcome, so we still
-    // poll once or twice to fetch the populated outputs dict.
-    setStatus("Running…");
-    bar?.indeterminate("Running…");
-    if (outcome.run !== null) {
-      try {
-        for await (const status of helpers.api.pollStatus(outcome.run.id, {
-          intervalSeconds: 1,
-          maxAttempts: 2,
-        })) {
-          if (status.is_terminal) {
-            renderTerminalResult(status, setStatus, resultsEl);
-            applyTerminalToBar(bar, status);
-            break;
-          }
-        }
-      } catch (err) {
-        setStatus(`Polling failed: ${humanizeError(err)}`, "#dc2626");
-        bar?.error("Run failed");
-      }
-    } else {
-      setStatus("Done (sync, no run id).");
-      bar?.complete("Done");
-    }
+  if (outcome.run === null) {
+    setStatus("Done.");
+    bar?.complete("Done");
     submitButton.disabled = false;
     return;
   }
 
-  // Async path: poll until terminal. A determinate bar is only
-  // meaningful here (the request returned immediately) AND only when
-  // the backend declares it emits progress — otherwise the polled
-  // progress_pct is meaningless and we stay indeterminate.
+  // Every run reference is polled to terminal, including runs dispatched
+  // synchronously in local development. The terminal status endpoint is the
+  // one response shape that always includes outputs and learner messages.
   const run = outcome.run;
   const useDeterminate = helpers.meta.reportsProgress === true;
   setStatus(`Run ${run.id} dispatched; polling…`);
@@ -601,6 +580,7 @@ async function handleSubmit({
   try {
     for await (const status of helpers.api.pollStatus(run.id, {
       intervalSeconds: run.poll_interval_seconds || 2,
+      deadlineAt: run.deadline_at,
     })) {
       if (status.is_terminal) {
         renderTerminalResult(status, setStatus, resultsEl);

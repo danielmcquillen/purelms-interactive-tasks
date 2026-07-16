@@ -23,6 +23,8 @@ interface RunReference {
   status: string;
   status_url: string;
   poll_interval_seconds: number;
+  websocket_url: string | null;
+  deadline_at: string | null;
 }
 
 interface SubmissionOutcomeResponse {
@@ -44,6 +46,7 @@ interface RunStatusResponse {
 interface PollOptions {
   intervalSeconds?: number;
   signal?: AbortSignal;
+  deadlineAt?: string | null;
 }
 
 interface MountHelpers {

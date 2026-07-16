@@ -23,6 +23,8 @@ interface RunReference {
   status: string;
   status_url: string;
   poll_interval_seconds: number;
+  websocket_url: string | null;
+  deadline_at: string | null;
 }
 
 interface SubmissionOutcomeResponse {
@@ -54,6 +56,7 @@ interface ApiError extends Error {
 interface PollOptions {
   intervalSeconds?: number;
   signal?: AbortSignal;
+  deadlineAt?: string | null;
 }
 
 interface MountHelpers {
@@ -157,7 +160,7 @@ async function handleSubmit(state: SubmitState): Promise<void> {
     return;
   }
 
-  if (outcome.is_complete || outcome.run === null) {
+  if (outcome.run === null) {
     statusEl.textContent = "Run complete (synchronous).";
     submitBtn.disabled = false;
     return;
@@ -169,6 +172,7 @@ async function handleSubmit(state: SubmitState): Promise<void> {
   try {
     for await (const status of helpers.api.pollStatus(run.id, {
       intervalSeconds: run.poll_interval_seconds || 2,
+      deadlineAt: run.deadline_at,
     })) {
       statusEl.textContent = `Run ${status.id}: ${status.status} (${status.progress_pct}%)`;
       if (status.is_terminal) {

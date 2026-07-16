@@ -14,6 +14,8 @@ export interface RunReference {
   status: string;
   status_url: string;
   poll_interval_seconds: number;
+  websocket_url: string | null;
+  deadline_at: string | null;
 }
 
 export interface SubmissionOutcomeResponse {
@@ -58,6 +60,7 @@ export interface PollHelperOptions {
   intervalSeconds?: number;
   maxAttempts?: number;
   signal?: AbortSignal;
+  deadlineAt?: string | null;
 }
 
 /**

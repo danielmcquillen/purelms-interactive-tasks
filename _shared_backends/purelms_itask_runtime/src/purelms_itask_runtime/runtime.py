@@ -8,20 +8,18 @@ SAME contract in both:
   ``PURELMS_INPUT_DIR`` (read-only) + ``PURELMS_OUTPUT_DIR`` (writable),
   blocks on the container, then reads ``output.json`` off disk. The
   callback URLs in the envelope are the ``file:///dev/null`` sentinel.
-- **Async / GCS** (``CloudRunJobsExecutionBackend``): the worker stages
-  the input envelope to ``PURELMS_INPUT_URI`` (a ``gs://`` URI), passes
-  ``PURELMS_OUTPUT_URI`` for where to write, and waits for HTTP callbacks
-  — it can't see the container's filesystem. The envelope carries real
-  ``https://`` worker callback URLs.
+- **Async / object storage** (``CloudRunJobsExecutionBackend``): canonical
+  ``gs://`` URIs identify the immutable envelopes, while short-lived signed
+  URLs grant this run one input read, output create, and verification read.
 
 This module hides that split behind three calls so a backend's
 ``main.py`` is identical regardless of deployment:
 
-1. :func:`read_input_envelope` — GCS download (URI mode) or local read.
+1. :func:`read_input_envelope` — signed download or local read.
 2. :func:`make_progress_reporter` — a best-effort ``(pct, step)`` reporter
    that POSTs :class:`~purelms_shared.callbacks.ProgressCallback` to the
    worker, or ``None`` when there's no real endpoint (local/sync).
-3. :func:`write_output_envelope` — GCS upload (URI mode) or local write,
+3. :func:`write_output_envelope` — signed upload or local write,
    then — async only — POSTs a required
    :class:`~purelms_shared.callbacks.CompleteCallback` notification so the
    worker promptly finalizes the run from the authoritative output envelope.
@@ -31,11 +29,9 @@ The mode is read from the environment's *shape* (which env vars are set,
 whether the callback URL is ``http(s)`` vs the ``file://`` sentinel) — a
 backend never branches on "am I local or cloud".
 
-Optional dependencies: ``google-cloud-storage`` (GCS I/O) and
-``google-auth`` (OIDC tokens for the callbacks) are needed ONLY on the
-async/Cloud Run image. They're declared under the ``cloud`` extra and
-imported lazily + guarded, so the local/dev path (and the analytical
-fallback that runs outside any container) works without them installed.
+``google-auth`` is required only for OIDC callback tokens on Cloud Run and is
+imported lazily. Object I/O uses the standard library against signed URLs, so
+backend identities hold no bucket permissions and need no storage SDK.
 """
 
 from __future__ import annotations
@@ -44,6 +40,7 @@ import hashlib
 import os
 import sys
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -110,9 +107,17 @@ class RuntimeConfigError(RuntimeError):
     """
 
 
-def _validate_uri_mode(input_uri: str | None, output_uri: str | None) -> None:
-    """Enforce: both GCS URIs (async) OR neither (local). No mixing."""
+def _validate_uri_mode(
+    input_uri: str | None,
+    output_uri: str | None,
+    signed_urls: tuple[str | None, str | None, str | None],
+) -> None:
+    """Enforce a complete signed-URL cloud contract or a fully local one."""
+    present_signed = [value is not None for value in signed_urls]
     if input_uri is None and output_uri is None:
+        if any(present_signed):
+            msg = "signed object URLs are not allowed without canonical GCS URIs"
+            raise RuntimeConfigError(msg)
         return  # local dir mode — neither set.
     if input_uri is None or output_uri is None:
         # Exactly one is set → a mixed mode we must reject.
@@ -142,6 +147,15 @@ def _validate_uri_mode(input_uri: str | None, output_uri: str | None) -> None:
             f"input={input_uri!r} output={output_uri!r}."
         )
         raise RuntimeConfigError(msg)
+    if not all(present_signed):
+        msg = (
+            "Cloud I/O requires PURELMS_INPUT_FETCH_URL, "
+            "PURELMS_OUTPUT_UPLOAD_URL, and PURELMS_OUTPUT_VERIFY_URL."
+        )
+        raise RuntimeConfigError(msg)
+    if any(not value.startswith("https://") for value in signed_urls if value):
+        msg = "Signed object URLs must use HTTPS"
+        raise RuntimeConfigError(msg)
 
 
 @dataclass(frozen=True)
@@ -162,6 +176,9 @@ class RuntimeLocation:
     input_sha256: str | None = None
     input_size_bytes: int | None = None
     input_generation: int | None = None
+    input_fetch_url: str | None = None
+    output_upload_url: str | None = None
+    output_verify_url: str | None = None
 
     @classmethod
     def from_env(cls) -> RuntimeLocation:
@@ -176,7 +193,14 @@ class RuntimeLocation:
         """
         input_uri = os.environ.get("PURELMS_INPUT_URI") or None
         output_uri = os.environ.get("PURELMS_OUTPUT_URI") or None
-        _validate_uri_mode(input_uri, output_uri)
+        input_fetch_url = os.environ.get("PURELMS_INPUT_FETCH_URL") or None
+        output_upload_url = os.environ.get("PURELMS_OUTPUT_UPLOAD_URL") or None
+        output_verify_url = os.environ.get("PURELMS_OUTPUT_VERIFY_URL") or None
+        _validate_uri_mode(
+            input_uri,
+            output_uri,
+            (input_fetch_url, output_upload_url, output_verify_url),
+        )
         input_sha256 = os.environ.get("PURELMS_INPUT_SHA256") or None
         input_size_raw = os.environ.get("PURELMS_INPUT_SIZE_BYTES") or None
         input_generation_raw = os.environ.get("PURELMS_INPUT_GENERATION") or None
@@ -215,6 +239,9 @@ class RuntimeLocation:
             input_sha256=input_sha256,
             input_size_bytes=input_size,
             input_generation=input_generation,
+            input_fetch_url=input_fetch_url,
+            output_upload_url=output_upload_url,
+            output_verify_url=output_verify_url,
         )
 
     @property
@@ -235,9 +262,8 @@ def read_input_envelope(location: RuntimeLocation) -> SimulationInputEnvelope:
     """
     max_bytes = _max_envelope_bytes()
     if location.uses_gcs_input:
-        raw_bytes = _gcs_download_bytes(
-            location.input_uri,  # type: ignore[arg-type]
-            generation=location.input_generation,
+        raw_bytes, _generation = _http_get_bytes(
+            location.input_fetch_url,  # type: ignore[arg-type]
             max_bytes=max_bytes,
         )
     else:
@@ -290,10 +316,21 @@ def write_output_envelope(
         size_bytes=len(payload),
     )
     if location.uses_gcs_output:
-        generation = _gcs_upload_bytes(
-            location.output_uri,  # type: ignore[arg-type]
+        upload_generation = _http_put_bytes(
+            location.output_upload_url,  # type: ignore[arg-type]
             payload,
         )
+        verified, verify_generation = _http_get_bytes(
+            location.output_verify_url,  # type: ignore[arg-type]
+            max_bytes=_max_envelope_bytes(),
+        )
+        if verified != payload:
+            msg = "uploaded output envelope did not verify byte-for-byte"
+            raise RuntimeConfigError(msg)
+        generation = verify_generation or upload_generation
+        if generation is None:
+            msg = "object storage did not return an output generation"
+            raise RuntimeConfigError(msg)
         identity = ObjectIdentity(
             sha256=identity.sha256,
             size_bytes=identity.size_bytes,
@@ -330,9 +367,7 @@ def make_progress_reporter(
     network error, non-2xx) is swallowed + logged to stderr so a flaky
     progress callback can never fail an otherwise-good run.
 
-    Planned direction: when the shared ``ProgressCallback`` grows optional
-    renderable-value fields, this reporter forwards them so the frontend
-    can show interim results mid-run; today it forwards percent + step.
+    Reports percentage, step, and elapsed seconds without logging parameters.
     """
     url = context.callback_url_progress
     if not url.lower().startswith(_HTTP_PREFIXES):
@@ -401,8 +436,7 @@ def _post_complete(
             last_exc = exc
             print(
                 f"purelms_itask_runtime: complete callback attempt "
-                f"{attempt}/{_COMPLETE_MAX_ATTEMPTS} failed for "
-                f"{output_envelope_uri!r}: {exc!r}",
+                f"{attempt}/{_COMPLETE_MAX_ATTEMPTS} failed: {exc!r}",
                 file=sys.stderr,
             )
             if attempt < _COMPLETE_MAX_ATTEMPTS:
@@ -410,10 +444,7 @@ def _post_complete(
         else:
             return
 
-    msg = (
-        f"complete callback undeliverable after {_COMPLETE_MAX_ATTEMPTS} "
-        f"attempts to {url} (envelope at {output_envelope_uri})"
-    )
+    msg = f"complete callback undeliverable after {_COMPLETE_MAX_ATTEMPTS} attempts"
     raise CompleteCallbackError(msg) from last_exc
 
 
@@ -459,56 +490,59 @@ def _fetch_id_token(audience: str) -> str:
 
 
 # ---------------------------------------------------------------------
-# GCS I/O (guarded — google-cloud-storage is in the ``cloud`` extra)
+# Signed object I/O
 # ---------------------------------------------------------------------
 
 
-def _split_gs_uri(uri: str) -> tuple[str, str]:
-    """``gs://bucket/path/to/obj`` -> ``("bucket", "path/to/obj")``."""
-    rest = uri[len(_GS_PREFIX) :]
-    bucket, _, blob = rest.partition("/")
-    if not bucket or not blob:
-        msg = f"malformed GCS URI {uri!r} (expected gs://bucket/object)"
-        raise ValueError(msg)
-    return bucket, blob
-
-
-def _gcs_download_bytes(
-    uri: str,
-    *,
-    generation: int | None,
-    max_bytes: int,
-) -> bytes:
-    bucket, blob = _split_gs_uri(uri)
-    from google.cloud import storage  # noqa: PLC0415 - cloud extra only
-
-    client = storage.Client()
-    obj = client.bucket(bucket).blob(blob, generation=generation)
-    obj.reload()
-    if obj.size is None or int(obj.size) > max_bytes:
-        msg = f"GCS envelope {uri!r} exceeds {max_bytes} bytes or has unknown size"
+def _http_get_bytes(url: str, *, max_bytes: int) -> tuple[bytes, int | None]:
+    """Read a bounded signed object URL and return bytes plus generation."""
+    request = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(
+            request, timeout=_CALLBACK_TIMEOUT_SECONDS
+        ) as response:
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None and int(content_length) > max_bytes:
+                msg = f"object envelope exceeds {max_bytes} bytes"
+                raise RuntimeConfigError(msg)
+            content = response.read(max_bytes + 1)
+            generation_raw = response.headers.get("x-goog-generation")
+    except urllib.error.HTTPError as exc:
+        msg = f"signed object read failed with HTTP {exc.code}"
+        raise RuntimeConfigError(msg) from None
+    except urllib.error.URLError:
+        msg = "signed object read failed at the transport layer"
+        raise RuntimeConfigError(msg) from None
+    if len(content) > max_bytes:
+        msg = f"object envelope exceeds {max_bytes} bytes"
         raise RuntimeConfigError(msg)
-    kwargs = {"if_generation_match": generation} if generation is not None else {}
-    return obj.download_as_bytes(**kwargs)
+    return content, int(generation_raw) if generation_raw else None
 
 
-def _gcs_upload_bytes(uri: str, content: bytes) -> int:
-    bucket, blob = _split_gs_uri(uri)
-    from google.cloud import storage  # noqa: PLC0415 - cloud extra only
-
-    client = storage.Client()
-    obj = client.bucket(bucket).blob(blob)
-    obj.upload_from_string(
-        content,
-        content_type="application/json",
-        # One output object belongs to one SimulationRun. A provider retry or
-        # duplicate execution must not overwrite the first attempt's bytes.
-        if_generation_match=0,
+def _http_put_bytes(url: str, content: bytes) -> int | None:
+    """Create an immutable output object through its signed PUT capability."""
+    request = urllib.request.Request(
+        url,
+        data=content,
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-if-generation-match": "0",
+        },
+        method="PUT",
     )
-    if obj.generation is None:
-        msg = f"GCS did not return a generation for immutable object {uri!r}"
-        raise RuntimeConfigError(msg)
-    return int(obj.generation)
+    try:
+        with urllib.request.urlopen(
+            request, timeout=_CALLBACK_TIMEOUT_SECONDS
+        ) as response:
+            response.read()
+            generation_raw = response.headers.get("x-goog-generation")
+    except urllib.error.HTTPError as exc:
+        msg = f"signed object create failed with HTTP {exc.code}"
+        raise RuntimeConfigError(msg) from None
+    except urllib.error.URLError:
+        msg = "signed object create failed at the transport layer"
+        raise RuntimeConfigError(msg) from None
+    return int(generation_raw) if generation_raw else None
 
 
 def _max_envelope_bytes() -> int:

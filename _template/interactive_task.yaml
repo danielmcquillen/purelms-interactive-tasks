@@ -76,5 +76,5 @@ lms_context_used:
 requires_user_context: false
 
 # Layer 1: outcome-mapping rules. v1: LMS-side evaluator reads these.
-# Empty falls back to MVP-A semantic (status == SUCCESS → passed).
+# Empty uses the default semantic (status == SUCCESS → passed).
 lms_outcomes: {}

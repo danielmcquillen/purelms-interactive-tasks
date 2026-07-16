@@ -154,7 +154,7 @@ lms_context_used:
 
 requires_user_context: false
 
-# lms_outcomes — the LMS-side evaluator (Slice 3e)
+# lms_outcomes — LMS-side outcome evaluation
 # reads these rules from the persisted manifest at completion and maps the
 # backend's outputs onto the grade book's (passed, score) fields.
 #

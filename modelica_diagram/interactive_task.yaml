@@ -4,7 +4,7 @@
 # Library components on a canvas; the backend topology-checks the diagram
 # against the scenario's expected graph, then runs the pre-compiled FMU.
 # FMUs are platform-authored (trust_tier: platform);
-# there is no author upload in the MVP.
+# author uploads are not part of this task's contract.
 
 schema_version: "purelms.interactive_task.v1"
 

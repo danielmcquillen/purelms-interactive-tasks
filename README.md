@@ -29,7 +29,7 @@ purelms-interactive-tasks/
 ├── justfile                   (recipes: build, test, publish, deploy per task)
 ├── scripts/                   (release-asset validation + real container smoke tests)
 ├── _template/                 (skeleton for new InteractiveTasks)
-├── _shared_backends/          (shared runtime for local-dir and Cloud Run/GCS I/O)
+├── _shared_backends/          (shared runtime for local-dir and signed object I/O)
 ├── echo/                      (stub test task — permanent test fixture)
 │   ├── backend/
 │   │   ├── Dockerfile

@@ -93,7 +93,7 @@ def _grade_nodes(
                 f"'{ntype}' isn't a component you can use in this exercise."
             )
 
-    # Each component type appears once in the MVP loop.
+    # Each component type appears once in the authored loop.
     have = Counter(t for t in id_to_type.values() if t in palette)
     want = Counter(scenario["expected"]["nodes"])
     for ptype, count in (want - have).items():

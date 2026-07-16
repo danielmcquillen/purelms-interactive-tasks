@@ -29,8 +29,7 @@
 #
 # Operator note: pre-commit only sees TRACKED files. After adding
 # new files, run `git add -N .` first so they're visible to the
-# hooks. This is a documented Slice 3c.5 lesson — pre-commit's
-# `--all-files` mode operates on `git ls-files` output.
+# hooks. Pre-commit's `--all-files` mode operates on `git ls-files` output.
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks

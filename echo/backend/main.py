@@ -55,7 +55,7 @@ def main() -> int:
 
     print(
         f"echo: run_id={location.run_id} backend_slug={envelope.backend_slug} "
-        f"parameters={envelope.parameters!r}",
+        f"parameter_keys={sorted(envelope.parameters)}",
     )
 
     # 2. Do the "work" — just echo. Real backends would run their

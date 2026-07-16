@@ -2,10 +2,10 @@
 
 Reads the input envelope, grades the learner's diagram (structural
 ``purelms.diagram.v1`` validation + scenario topology check), and — only if the
-topology is correct — runs the scenario's pre-compiled FMU. Writes a SUCCESS
-output envelope either way: a wrong diagram is a *valid* run with
-``topology_correct=false`` (the run worked; the answer was wrong). Only an
-infrastructure failure (can't read the input) is a nonzero exit.
+topology is correct — runs the scenario's pre-compiled FMU. A wrong diagram is
+a valid SUCCESS result with ``topology_correct=false``. Solver, FMU, and timeout
+failures write a FAILED_RUNTIME envelope so the LMS can close and refund the
+run; only failure before the input context is available exits without output.
 """
 
 from __future__ import annotations
@@ -45,6 +45,7 @@ def main() -> int:
 
     outputs: dict = {"topology_correct": False}
     messages: list[Message] = []
+    status = OutputStatus.SUCCESS
 
     if scenario is None:
         messages.append(_msg("error", "SCENARIO", f"Unknown scenario '{scenario_id}'."))
@@ -54,11 +55,24 @@ def main() -> int:
         level = "info" if grade.topology_correct else "warning"
         messages.extend(_msg(level, "TOPOLOGY", line) for line in grade.messages)
         if grade.topology_correct:
-            messages.extend(_run_simulation(scenario, params, envelope, outputs))
+            try:
+                outputs.update(
+                    run_fmu(
+                        _SCENARIOS_DIR / scenario["id"] / "model.fmu",
+                        params,
+                        scenario,
+                        timeout_s=(
+                            getattr(envelope.context, "timeout_seconds", 60) or 60
+                        ),
+                    ),
+                )
+            except FmuRunError as exc:
+                status = OutputStatus.FAILED_RUNTIME
+                messages.append(_msg("error", "FMU_RUNTIME", str(exc)))
 
     output = SimulationOutputEnvelope(
         run_id=envelope.run_id,
-        status=OutputStatus.SUCCESS,
+        status=status,
         outputs=outputs,
         artifacts=[],
         messages=messages,
@@ -67,23 +81,6 @@ def main() -> int:
     )
     write_output_envelope(location, output, envelope.context)
     return 0
-
-
-def _run_simulation(scenario, params, envelope, outputs) -> list[Message]:
-    """Run the FMU for a correct diagram; return any learner messages.
-
-    A correct topology that can't simulate (FMU absent, timeout, solver error)
-    is NOT a failed run — ``topology_correct`` stays true and the learner gets a
-    message. ``fmpy`` itself is imported lazily inside ``fmpy_runner`` so the
-    topology path never loads native code.
-    """
-    fmu_path = _SCENARIOS_DIR / scenario["id"] / "model.fmu"
-    timeout_s = getattr(envelope.context, "timeout_seconds", 60) or 60
-    try:
-        outputs.update(run_fmu(fmu_path, params, scenario, timeout_s=timeout_s))
-    except FmuRunError as exc:
-        return [_msg("warning", "FMU", str(exc))]
-    return []
 
 
 def _load_scenario(scenario_id: str) -> dict | None:

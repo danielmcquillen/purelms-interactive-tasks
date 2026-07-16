@@ -1,14 +1,14 @@
 """
 Tests for the shared backend runtime helper.
 
-The GCS + HTTP seams are monkeypatched (``_gcs_download_bytes`` /
-``_gcs_upload_bytes`` / ``_post_json``) so the contract logic — which mode
-is chosen, what gets written, which callbacks fire — is exercised without
-google-cloud-storage, google-auth, a network, or a real bucket.
+The signed-object and callback HTTP seams are monkeypatched so the contract
+is exercised without credentials, a network, or a real bucket.
 """
 
 from __future__ import annotations
 
+import io
+import urllib.error
 from uuid import uuid4
 
 import purelms_itask_runtime.runtime as rt
@@ -59,6 +59,20 @@ def _output_envelope(run_id) -> SimulationOutputEnvelope:
     )
 
 
+def _set_cloud_env(monkeypatch) -> None:
+    monkeypatch.setenv("PURELMS_INPUT_URI", "gs://bucket/runs/1/input.json")
+    monkeypatch.setenv("PURELMS_OUTPUT_URI", "gs://bucket/runs/1/output.json")
+    monkeypatch.setenv("PURELMS_INPUT_FETCH_URL", "https://signed.example/input")
+    monkeypatch.setenv(
+        "PURELMS_OUTPUT_UPLOAD_URL",
+        "https://signed.example/output-upload",
+    )
+    monkeypatch.setenv(
+        "PURELMS_OUTPUT_VERIFY_URL",
+        "https://signed.example/output-verify",
+    )
+
+
 # ---------------------------------------------------------------------
 # RuntimeLocation.from_env
 # ---------------------------------------------------------------------
@@ -79,8 +93,7 @@ def test_from_env_local_dir_mode(monkeypatch, tmp_path):
 
 
 def test_from_env_gcs_uri_mode(monkeypatch):
-    monkeypatch.setenv("PURELMS_INPUT_URI", "gs://bucket/runs/1/input.json")
-    monkeypatch.setenv("PURELMS_OUTPUT_URI", "gs://bucket/runs/1/output.json")
+    _set_cloud_env(monkeypatch)
     monkeypatch.setenv("PURELMS_RUN_ID", "run-2")
 
     loc = RuntimeLocation.from_env()
@@ -129,8 +142,8 @@ def test_read_input_gcs(monkeypatch):
     env = _input_envelope(ctx)
     monkeypatch.setattr(
         rt,
-        "_gcs_download_bytes",
-        lambda _uri, **_kwargs: env.model_dump_json().encode(),
+        "_http_get_bytes",
+        lambda _url, **_kwargs: (env.model_dump_json().encode(), 7),
     )
 
     loc = RuntimeLocation(
@@ -139,6 +152,7 @@ def test_read_input_gcs(monkeypatch):
         output_uri="gs://bucket/runs/1/output.json",
         input_dir=rt.Path("/purelms/input"),
         output_dir=rt.Path("/purelms/output"),
+        input_fetch_url="https://signed.example/input",
     )
     parsed = read_input_envelope(loc)
     assert parsed.backend_slug == "echo"
@@ -218,13 +232,18 @@ def test_write_output_local_writes_file_and_skips_complete(monkeypatch, tmp_path
     assert posts == []
 
 
-def test_write_output_gcs_uploads_and_posts_complete(monkeypatch):
-    uploads: list[tuple[str, bytes]] = []
+def test_write_output_gcs_uploads_verifies_and_posts_complete(monkeypatch):
+    uploads: list[bytes] = []
     posts: list[tuple[str, str, str]] = []
     monkeypatch.setattr(
         rt,
-        "_gcs_upload_bytes",
-        lambda uri, content: uploads.append((uri, content)) or 456,
+        "_http_put_bytes",
+        lambda _url, content: uploads.append(content) or 456,
+    )
+    monkeypatch.setattr(
+        rt,
+        "_http_get_bytes",
+        lambda _url, **_kwargs: (uploads[0], 456),
     )
     monkeypatch.setattr(
         rt,
@@ -241,14 +260,16 @@ def test_write_output_gcs_uploads_and_posts_complete(monkeypatch):
         output_uri=output_uri,
         input_dir=rt.Path("/purelms/input"),
         output_dir=rt.Path("/purelms/output"),
+        input_fetch_url="https://signed.example/input",
+        output_upload_url="https://signed.example/output-upload",
+        output_verify_url="https://signed.example/output-verify",
     )
 
     write_output_envelope(loc, _output_envelope(run_id), ctx, exit_code=0)
 
     # Uploaded the envelope to the output URI...
     assert len(uploads) == 1
-    assert uploads[0][0] == output_uri
-    assert b'"status"' in uploads[0][1]
+    assert b'"status"' in uploads[0]
     # ...and POSTed the required completion notification carrying that URI.
     assert len(posts) == 1
     url, audience, body = posts[0]
@@ -356,7 +377,17 @@ def test_complete_callback_refreshes_oidc_token_on_retry(monkeypatch):
 def test_write_output_gcs_raises_when_complete_undeliverable(monkeypatch):
     """The envelope is uploaded, but an undeliverable /complete propagates
     as CompleteCallbackError (so the backend exits non-zero)."""
-    monkeypatch.setattr(rt, "_gcs_upload_bytes", lambda _uri, _content: 456)
+    written: list[bytes] = []
+    monkeypatch.setattr(
+        rt,
+        "_http_put_bytes",
+        lambda _url, content: written.append(content) or 456,
+    )
+    monkeypatch.setattr(
+        rt,
+        "_http_get_bytes",
+        lambda _url, **_kwargs: (written[0], 456),
+    )
     monkeypatch.setattr(rt, "_post_json", _boom)
     monkeypatch.setattr(rt.time, "sleep", lambda _s: None)
 
@@ -367,6 +398,9 @@ def test_write_output_gcs_raises_when_complete_undeliverable(monkeypatch):
         output_uri="gs://bucket/runs/1/output.json",
         input_dir=rt.Path("/purelms/input"),
         output_dir=rt.Path("/purelms/output"),
+        input_fetch_url="https://signed.example/input",
+        output_upload_url="https://signed.example/output-upload",
+        output_verify_url="https://signed.example/output-verify",
     )
     with pytest.raises(rt.CompleteCallbackError):
         write_output_envelope(loc, _output_envelope(uuid4()), ctx)
@@ -424,8 +458,7 @@ def test_read_input_rejects_hash_mismatch(tmp_path):
 
 def test_from_env_requires_generation_for_strict_gcs_input(monkeypatch):
     """A strict cloud launch must pin the exact object generation."""
-    monkeypatch.setenv("PURELMS_INPUT_URI", "gs://bucket/runs/1/input.json")
-    monkeypatch.setenv("PURELMS_OUTPUT_URI", "gs://bucket/runs/1/output.json")
+    _set_cloud_env(monkeypatch)
     monkeypatch.setenv("PURELMS_INPUT_SHA256", "a" * 64)
     monkeypatch.setenv("PURELMS_INPUT_SIZE_BYTES", "123")
     monkeypatch.delenv("PURELMS_INPUT_GENERATION", raising=False)
@@ -458,3 +491,50 @@ def test_from_env_rejects_non_gs_uris(monkeypatch):
     monkeypatch.setenv("PURELMS_OUTPUT_URI", "https://example/output.json")
     with pytest.raises(rt.RuntimeConfigError):
         RuntimeLocation.from_env()
+
+
+def test_write_output_rejects_bytes_changed_after_upload(monkeypatch):
+    """The runtime notifies completion only after byte-for-byte verification."""
+    monkeypatch.setattr(rt, "_http_put_bytes", lambda _url, _content: 9)
+    monkeypatch.setattr(
+        rt,
+        "_http_get_bytes",
+        lambda _url, **_kwargs: (b"different", 9),
+    )
+    posts: list[object] = []
+    monkeypatch.setattr(rt, "_post_json", lambda *_args: posts.append(object()))
+    location = RuntimeLocation(
+        run_id="r",
+        input_uri="gs://bucket/runs/1/input.json",
+        output_uri="gs://bucket/runs/1/output.json",
+        input_dir=rt.Path("/purelms/input"),
+        output_dir=rt.Path("/purelms/output"),
+        input_fetch_url="https://signed.example/input",
+        output_upload_url="https://signed.example/output-upload",
+        output_verify_url="https://signed.example/output-verify",
+    )
+
+    with pytest.raises(rt.RuntimeConfigError, match="byte-for-byte"):
+        write_output_envelope(
+            location,
+            _output_envelope(uuid4()),
+            _context(progress_url=_PROGRESS_URL, complete_url=_COMPLETE_URL),
+        )
+
+    assert posts == []
+
+
+def test_signed_http_error_does_not_expose_capability_url(monkeypatch):
+    """An expiring signed URL must never appear in a surfaced diagnostic."""
+    secret_url = "https://storage.example/object?X-Goog-Signature=secret"
+    error = urllib.error.HTTPError(secret_url, 403, "Forbidden", {}, io.BytesIO())
+    monkeypatch.setattr(
+        rt.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+    )
+
+    with pytest.raises(rt.RuntimeConfigError) as captured:
+        rt._http_get_bytes(secret_url, max_bytes=100)
+
+    assert "secret" not in str(captured.value)

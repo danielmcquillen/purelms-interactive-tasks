@@ -36,12 +36,12 @@ backend:
 frontend:
   # Built via `just frontend-build echo` to echo/frontend/dist/echo.js.
   # PureLMS's install_interactive_task command stages this into the
-  # LMS's static dir at purelms/static/backends/echo/echo.js.
+  # versioned static path at backends/echo/0.1.0/echo.js.
   bundle: echo.js
 
 # Echo accepts arbitrary parameters — no fixed schema. Real
 # InteractiveTasks declare concrete parameter shapes here. See
-# energyplus_single_zone/interactive_task.yaml (Slice 3d C.3) for
+# energyplus_single_zone/interactive_task.yaml for
 # a worked example with min/max/choices/default.
 parameters: []
 
@@ -57,7 +57,7 @@ lms_context_used:
   - backend_version
 
 # v1: declarative only. Echo is a fixture, not an outcome-bearing
-# task. Falls back to MVP-A semantic: status == SUCCESS → passed.
+# task. Uses the default semantic: status == SUCCESS → passed.
 requires_user_context: false
 
 lms_outcomes: {}

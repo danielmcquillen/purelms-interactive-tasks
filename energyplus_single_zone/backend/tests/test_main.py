@@ -234,7 +234,7 @@ def test_main_malformed_input_file_exits_nonzero(workspace):
     assert not (output_dir / "output.json").exists()
 
 
-# The progress/complete callback wiring + the local-dir-vs-GCS I/O now
+# The progress/complete callback wiring + local-vs-signed-object I/O
 # live in the shared ``purelms_itask_runtime`` package and are tested
 # there (``_shared_backends/purelms_itask_runtime/tests/test_runtime.py``).
 # These tests cover only this backend's contract: read input -> run the

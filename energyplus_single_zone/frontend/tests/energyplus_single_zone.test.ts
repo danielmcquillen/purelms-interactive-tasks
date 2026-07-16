@@ -114,9 +114,24 @@ describe("mount() — form rendering", () => {
 
     await mount(element, {}, makeHelpers());
 
-    expect(element.querySelector("#purelms-glazing_u_value")).not.toBeNull();
-    expect(element.querySelector("#purelms-window_area")).not.toBeNull();
-    expect(element.querySelector("#purelms-climate_zone")).not.toBeNull();
+    expect(element.querySelector("#purelms-42-glazing-u-value")).not.toBeNull();
+    expect(element.querySelector("#purelms-42-window-area")).not.toBeNull();
+    expect(element.querySelector("#purelms-42-climate-zone")).not.toBeNull();
+  });
+
+  it("scopes form IDs to the placement", async () => {
+    const first = document.createElement("div");
+    const second = document.createElement("div");
+    await mount(first, {}, makeHelpers());
+    await mount(
+      second,
+      {},
+      makeHelpers({ meta: { ...makeHelpers().meta, unitBlockId: 43 } }),
+    );
+
+    const ids = [...first.querySelectorAll("[id]"), ...second.querySelectorAll("[id]")]
+      .map((node) => node.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it("uses manifest defaults when config is empty", async () => {
@@ -124,13 +139,13 @@ describe("mount() — form rendering", () => {
     await mount(element, {}, makeHelpers());
 
     const uvalue = element.querySelector(
-      "#purelms-glazing_u_value",
+      "#purelms-42-glazing-u-value",
     ) as HTMLInputElement;
     const area = element.querySelector(
-      "#purelms-window_area",
+      "#purelms-42-window-area",
     ) as HTMLInputElement;
     const climate = element.querySelector(
-      "#purelms-climate_zone",
+      "#purelms-42-climate-zone",
     ) as HTMLSelectElement;
 
     expect(uvalue.value).toBe("2.5");
@@ -153,13 +168,13 @@ describe("mount() — form rendering", () => {
     );
 
     const uvalue = element.querySelector(
-      "#purelms-glazing_u_value",
+      "#purelms-42-glazing-u-value",
     ) as HTMLInputElement;
     const area = element.querySelector(
-      "#purelms-window_area",
+      "#purelms-42-window-area",
     ) as HTMLInputElement;
     const climate = element.querySelector(
-      "#purelms-climate_zone",
+      "#purelms-42-climate-zone",
     ) as HTMLSelectElement;
 
     expect(uvalue.value).toBe("1");
@@ -180,11 +195,11 @@ describe("mount() — form rendering", () => {
     );
 
     const uvalueRow = element.querySelector(
-      "#purelms-glazing_u_value",
+      "#purelms-42-glazing-u-value",
     )?.parentElement;
     expect(uvalueRow?.style.display).toBe("none");
     // Other parameters still visible.
-    const areaRow = element.querySelector("#purelms-window_area")?.parentElement;
+    const areaRow = element.querySelector("#purelms-42-window-area")?.parentElement;
     expect(areaRow?.style.display).not.toBe("none");
   });
 
@@ -201,7 +216,7 @@ describe("mount() — form rendering", () => {
     );
 
     const area = element.querySelector(
-      "#purelms-window_area",
+      "#purelms-42-window-area",
     ) as HTMLInputElement;
     expect(area.disabled).toBe(true);
   });
@@ -222,7 +237,7 @@ describe("mount() — form rendering", () => {
     );
 
     const climate = element.querySelector(
-      "#purelms-climate_zone",
+      "#purelms-42-climate-zone",
     ) as HTMLSelectElement;
     expect(climate.options.length).toBe(1);
     expect(climate.options[0]!.value).toBe("5A");
@@ -241,7 +256,7 @@ describe("mount() — form rendering", () => {
     );
 
     const uvalue = element.querySelector(
-      "#purelms-glazing_u_value",
+      "#purelms-42-glazing-u-value",
     ) as HTMLInputElement;
     expect(uvalue.min).toBe("1");
     expect(uvalue.max).toBe("3");
@@ -305,7 +320,7 @@ describe("mount() — submission", () => {
     const submit = vi.fn(
       async (): Promise<SubmissionOutcomeResponse> => ({
         attempt: null,
-        run: { id: "run-123", status: "running", status_url: "", poll_interval_seconds: 1 },
+        run: { id: "run-123", status: "running", status_url: "", poll_interval_seconds: 1, websocket_url: null, deadline_at: null },
         is_complete: false,
       }),
     );
@@ -357,7 +372,7 @@ describe("mount() — submission", () => {
     const submit = vi.fn(
       async (): Promise<SubmissionOutcomeResponse> => ({
         attempt: null,
-        run: { id: "run-esc", status: "running", status_url: "", poll_interval_seconds: 1 },
+        run: { id: "run-esc", status: "running", status_url: "", poll_interval_seconds: 1, websocket_url: null, deadline_at: null },
         is_complete: false,
       }),
     );
@@ -399,7 +414,7 @@ describe("mount() — submission", () => {
     const submit = vi.fn(
       async (): Promise<SubmissionOutcomeResponse> => ({
         attempt: null,
-        run: { id: "run-x", status: "running", status_url: "", poll_interval_seconds: 1 },
+        run: { id: "run-x", status: "running", status_url: "", poll_interval_seconds: 1, websocket_url: null, deadline_at: null },
         is_complete: false,
       }),
     );
@@ -483,7 +498,7 @@ describe("mount() — progress bar", () => {
     const submit = vi.fn(
       async (): Promise<SubmissionOutcomeResponse> => ({
         attempt: null,
-        run: { id: "run-async", status: "running", status_url: "", poll_interval_seconds: 1 },
+        run: { id: "run-async", status: "running", status_url: "", poll_interval_seconds: 1, websocket_url: null, deadline_at: null },
         is_complete: false,
       }),
     );
@@ -546,7 +561,7 @@ describe("mount() — progress bar", () => {
     const submit = vi.fn(
       async (): Promise<SubmissionOutcomeResponse> => ({
         attempt: null,
-        run: { id: "run-noprog", status: "running", status_url: "", poll_interval_seconds: 1 },
+        run: { id: "run-noprog", status: "running", status_url: "", poll_interval_seconds: 1, websocket_url: null, deadline_at: null },
         is_complete: false,
       }),
     );
@@ -591,16 +606,13 @@ describe("mount() — progress bar", () => {
     expect(modes).toContain("complete");
   });
 
-  it("stays INDETERMINATE on the sync path even when reportsProgress is true", async () => {
-    // The load-bearing rule: determinate needs BOTH the capability AND
-    // an async run. A blocking sync request has no observable midpoint,
-    // so a declared-progress backend still gets an indeterminate bar.
+  it("uses the declared progress mode whenever a run reference is polled", async () => {
     const element = document.createElement("div");
     const bar = makeRecordingBar();
     const submit = vi.fn(
       async (): Promise<SubmissionOutcomeResponse> => ({
         attempt: null,
-        run: { id: "run-sync", status: "success", status_url: "", poll_interval_seconds: 1 },
+        run: { id: "run-sync", status: "success", status_url: "", poll_interval_seconds: 1, websocket_url: null, deadline_at: null },
         is_complete: true,
       }),
     );
@@ -631,7 +643,7 @@ describe("mount() — progress bar", () => {
     await submitAndSettle(element);
 
     const modes = bar.calls.map((c) => c.mode);
-    expect(modes).not.toContain("determinate");
+    expect(modes).toContain("determinate");
     expect(modes).toContain("indeterminate");
     expect(modes).toContain("complete");
   });
@@ -669,7 +681,7 @@ describe("mount() — progress bar", () => {
     const submit = vi.fn(
       async (): Promise<SubmissionOutcomeResponse> => ({
         attempt: null,
-        run: { id: "run-old", status: "running", status_url: "", poll_interval_seconds: 1 },
+        run: { id: "run-old", status: "running", status_url: "", poll_interval_seconds: 1, websocket_url: null, deadline_at: null },
         is_complete: false,
       }),
     );
@@ -709,7 +721,7 @@ describe("mount() — progress bar", () => {
     const submit = vi.fn(
       async (): Promise<SubmissionOutcomeResponse> => ({
         attempt: null,
-        run: { id: "run-dup", status: "running", status_url: "", poll_interval_seconds: 1 },
+        run: { id: "run-dup", status: "running", status_url: "", poll_interval_seconds: 1, websocket_url: null, deadline_at: null },
         is_complete: false,
       }),
     );

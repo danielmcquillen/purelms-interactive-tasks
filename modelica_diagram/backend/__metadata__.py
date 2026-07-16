@@ -2,8 +2,7 @@
 Per-backend runtime self-description (see ``echo`` for the convention).
 
 This file is informational. ``interactive_task.yaml`` is the LMS source of
-truth; keep this self-description synchronized for operator inspection and
-future automated drift detection.
+truth; keep this self-description synchronized for release/operator inventory.
 """
 
 BACKEND_TYPE = "MODELICA_DIAGRAM"
