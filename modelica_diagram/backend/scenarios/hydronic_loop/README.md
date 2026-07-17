@@ -104,5 +104,6 @@ produce artifacts.
 
 `model.fmu` + `scenario.json` are pinned by SHA in the manifest `assets:` block.
 After changing either: re-hash, update the manifest, **bump the manifest
-version**, run `just smoke modelica_diagram`, and reinstall with `--replace-active`
-(the installer won't mutate a registration that has historical runs).
+version**, run `just smoke modelica_diagram`, install the new candidate, then
+activate it explicitly after verification (the installer won't mutate a
+registration that has historical runs).

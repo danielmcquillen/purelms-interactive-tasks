@@ -94,6 +94,9 @@ interface EchoConfig {
   last_run?: EchoLastRun;
 }
 
+/** Stable browser-host interface implemented by this bundle. */
+export const mountContract = "purelms.interactive_mount.v1";
+
 export async function mount(
   element: HTMLElement,
   configRaw: Record<string, unknown>,

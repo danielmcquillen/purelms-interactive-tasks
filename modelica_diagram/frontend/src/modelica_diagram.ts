@@ -619,3 +619,5 @@ function humanize(err: unknown): string {
   }
   return String(err);
 }
+/** Stable browser-host interface implemented by this bundle. */
+export const mountContract = "purelms.interactive_mount.v1";

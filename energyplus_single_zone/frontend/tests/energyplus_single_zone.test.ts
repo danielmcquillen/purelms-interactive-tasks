@@ -10,7 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { mount } from "../src/energyplus_single_zone";
+import { mount, mountContract } from "../src/energyplus_single_zone";
 import type {
   MountHelpers,
   ProgressBarController,
@@ -904,5 +904,9 @@ describe("module exports", () => {
     const mod = await import("../src/energyplus_single_zone");
     expect(typeof mod.mount).toBe("function");
     expect(mod.default).toBe(namedMount);
+  });
+
+  it("declares the supported browser mount contract", () => {
+    expect(mountContract).toBe("purelms.interactive_mount.v1");
   });
 });

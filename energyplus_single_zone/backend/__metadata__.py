@@ -17,7 +17,7 @@ BACKEND_DESCRIPTION = (
     "(PURELMS_EPLUS_MODE=analytical), so contributors can iterate without the "
     "~500 MB EnergyPlus dependency."
 )
-BACKEND_VERSION = "0.3.0"
+BACKEND_VERSION = "0.3.1"
 
 # Mirror the manifest's ``parameters:`` block (informational).
 EXPOSED_PARAMETERS = [

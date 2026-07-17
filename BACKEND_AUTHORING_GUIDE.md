@@ -177,9 +177,10 @@ backend:
 ```yaml
 frontend:
   bundle: my_task.js       # filename inside frontend/dist/ after esbuild
+  mount_contract: purelms.interactive_mount.v1
 ```
 
-`bundle` is the filename the LMS dispatcher will dynamic-import from `/static/backends/<slug>/<version>/<bundle>`. It must exist in `frontend/dist/` after `npm run build` (or `just frontend-build <slug>`). The versioned path prevents a new release from replacing the UI for an older pinned block.
+`bundle` is the filename the LMS dispatcher will dynamic-import from `/static/backends/<slug>/<version>/<bundle>`. It must exist in `frontend/dist/` after `npm run build` (or `just frontend-build <slug>`). The versioned path prevents a new release from replacing the UI for an older pinned block. `mount_contract` declares the browser-host interface implemented by the bundle; use `purelms.interactive_mount.v1` for all current tasks. Older v1 manifests that omit it are interpreted as v1 for replay compatibility.
 
 ### Progress reporting
 
@@ -874,7 +875,7 @@ The frontend bundle should:
 
 ## Installation + lifecycle commands
 
-Four management commands drive an InteractiveTask's lifecycle. All live in `purelms` and are invoked from a PureLMS checkout.
+Five management commands drive an InteractiveTask's lifecycle. All live in `purelms` and are invoked from a PureLMS checkout.
 
 ### `install_interactive_task`
 
@@ -890,17 +891,29 @@ Reads `my_task/interactive_task.yaml`, validates against the v1 schema, computes
 |---|---|
 | `--dry-run` | Validate the manifest + show the planned action. No DB writes, no bundle staging. Run this first when iterating on a manifest. |
 | `--registry <prefix>` | Override the container registry prefix (e.g. `us-central1-docker.pkg.dev/myproj/purelms`). Used only when `backend.image` is omitted from the manifest. |
-| `--replace-active` | **Required** when an active registration at a different version of the same slug already exists. Atomically deactivates the old row and activates the new one in one transaction. |
 | `--force` | Allow content-overwriting reinstall when an existing row at this `(slug, version)` is PRISTINE (zero `SimulationRun` FKs + zero `InteractiveTaskBlock` slug references). Refuses on non-pristine rows. |
 
-**The install behavior table** (memorize the high points):
+Installation is additive: it never changes a current authoring default.
 
 | Existing state | Behavior |
 |---|---|
-| No row for slug at all | Create new active row. |
-| Inactive row at same (slug, version), no active row | Reactivate. If sha matches → idempotent; if pristine + `--force` → overwrite content; if non-pristine + sha mismatch → refuse. |
-| Active row at same (slug, version) | Idempotent if sha matches. `--force` overwrites pristine rows; refuses on non-pristine. |
-| Active row at different version, same slug | REFUSE unless `--replace-active`. With `--replace-active`: deactivate old, create new (or reactivate existing inactive at incoming version). |
+| No row at this `(slug, version)` | Create a new inactive candidate. |
+| Existing row at this `(slug, version)` | Idempotent if manifest, digest, and bundle hash match. `--force` repairs only a pristine row. |
+| A different version is active | Leave it active and install the new candidate beside it. |
+
+### `activate_interactive_task`
+
+```bash
+# Verify the exact staged bundle without changing the authoring default.
+uv run python manage.py activate_interactive_task my_task 0.2.0 \
+  --actor-email operator@example.org --reason "Release smoke passed" --dry-run
+
+# Make the verified version the default for newly authored blocks.
+uv run python manage.py activate_interactive_task my_task 0.2.0 \
+  --actor-email operator@example.org --reason "Release smoke passed"
+```
+
+Activation verifies the staged bundle hash, locks every registration for the slug, changes the single active default, and writes an audit event. Existing blocks, attempts, and runs retain their exact pins; use the Builder's explicit upgrade operation for a block that should move forward.
 
 ### `list_interactive_tasks`
 
@@ -918,7 +931,7 @@ Tabular view of installed InteractiveTasks. Shows active state + block-reference
 uv run python manage.py deactivate_interactive_task my_task
 ```
 
-Sets `is_active=False` on the slug's active row. Existing `InteractiveTaskBlock` placements continue to render but surface a "no longer available" state. To restore: re-run `install_interactive_task` against the same manifest (sha256 match → idempotent reactivation).
+Sets `is_active=False` on the slug's active row. Existing `InteractiveTaskBlock` placements continue to render but surface a "no longer available" state. To restore, reinstall the exact version if necessary, then use `activate_interactive_task` with a recorded operator identity and reason.
 
 ### `uninstall_interactive_task`
 
@@ -1063,7 +1076,7 @@ just smoke-all              # every backend's real domain runtime
 - **`verified`** — a contributor task under review. It can be registered but is not currently launchable.
 - **`community`** — unverified metadata. It is not launchable and can never satisfy learner evidence or credential-bearing goals.
 
-When promoting from `community` → `verified`, bump the manifest version and re-install with `--replace-active`. The promotion is auditable because every registration row carries `manifest_sha256` + `manifest_yaml`.
+When promoting from `community` → `verified`, bump the manifest version, install it as a candidate, verify it, then activate it explicitly. The promotion is auditable because every registration row carries `manifest_sha256` + `manifest_yaml`.
 
 ### Execution mode
 
@@ -1086,14 +1099,14 @@ Semver. The `version` field in your manifest drives the registration row's `vers
 
 | Change | Bump |
 |---|---|
-| Container code change (no manifest change) | Patch (`0.1.0` → `0.1.1`). Re-install with `--replace-active`. |
+| Container code change (no manifest change) | Patch (`0.1.0` → `0.1.1`). Install as a candidate, verify, then activate explicitly. |
 | Parameter / output schema additive (new optional parameter, new output) | Minor (`0.1.x` → `0.2.0`). Course authors with existing blocks keep working; new blocks get the richer schema. |
 | Parameter / output schema breaking (renamed parameter, removed output) | Major (`0.x.y` → `1.0.0`). Existing blocks may break — old block configs reference old parameter names. |
 | Trust tier change (`community` → `verified`) | Minor. The promotion is itself a semver-significant event. |
 
 **Registration immutability:** once any `SimulationRun` references a registration row OR any `InteractiveTaskBlock` references the slug, the row's content is **frozen** for audit. Mutating it via `--force` is blocked. Any real change requires a new version.
 
-This is the framework's way of saying "you can't silently change what 'EnergyPlus 0.1.0' means after learners have run against it." Bump the version; the old runs keep pointing at the original row (preserved); new runs use the new version after `--replace-active`.
+This is the framework's way of saying "you can't silently change what 'EnergyPlus 0.1.0' means after learners have run against it." Bump the version; the old runs keep pointing at the original row (preserved); new blocks use a verified version only after explicit activation.
 
 ---
 

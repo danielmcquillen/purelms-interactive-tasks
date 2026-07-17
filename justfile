@@ -112,7 +112,6 @@ publish slug image_tag="": (_stage-shared-wheel slug) _validate-release-assets
         echo "✗ Image tag must be vX.Y.Z; got: ${TAG}"
         exit 1
     fi
-
     IMAGE_SLUG=$(printf '%s' "{{ slug }}" | tr '_' '-')
     IMAGE="${REGISTRY}/purelms-itask-${IMAGE_SLUG}"
     echo "Building and publishing ${IMAGE}:${TAG} (linux/amd64)..."
@@ -192,6 +191,10 @@ deploy slug stage image_tag="": (_check-slug slug)
     TAG="${TAG:-v${VERSION}}"
     if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
         echo "✗ Image tag must be vX.Y.Z; got: ${TAG}"
+        exit 1
+    fi
+    if ! git verify-tag "${TAG}"; then
+        echo "✗ Backend release tag ${TAG} did not verify against a trusted signing key."
         exit 1
     fi
 

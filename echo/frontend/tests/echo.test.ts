@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mount } from "../src/echo.js";
+import { mount, mountContract } from "../src/echo.js";
 
 interface CapturedSubmit {
   parameters: Record<string, unknown>;
@@ -39,6 +39,10 @@ function makeHelpers(opts: {
   };
   return { helpers, submitCalls };
 }
+
+it("declares the supported browser mount contract", () => {
+  expect(mountContract).toBe("purelms.interactive_mount.v1");
+});
 
 let host: HTMLElement;
 

@@ -34,7 +34,11 @@ vi.mock("drawflow", () => ({
   },
 }));
 
-const { mount } = await import("../src/modelica_diagram");
+const { mount, mountContract } = await import("../src/modelica_diagram");
+
+it("declares the supported browser mount contract", () => {
+  expect(mountContract).toBe("purelms.interactive_mount.v1");
+});
 
 function correctLoopExport(): unknown {
   const node = (id: number, type: string, outputs: object) => ({
