@@ -130,21 +130,24 @@ cleanly.
 
 ## Cutting a release
 
-1. Run `just test-all` and `just smoke-all`. The latter executes the real
-   EnergyPlus binary and Modelica FMU as `linux/amd64`, including under Docker
-   emulation on Apple Silicon.
-   It also verifies the loaded image architecture and required OCI labels.
-2. Bump `version` in `pyproject.toml`. Also bump every released task's manifest,
+1. Bump `version` in `pyproject.toml`. Also bump every released task's manifest,
    `backend/__metadata__.py`, and Dockerfile `PURELMS_TASK_VERSION`; refresh
    `uv.lock`, commit, and push to `main`.
+2. Run the complete local release gate:
+   ```bash
+   just release-preflight 0.2.3
+   ```
+   It validates immutable assets and version changes, runs lint and all tests,
+   builds every frontend, and runs the real EnergyPlus/Modelica smoke suite as
+   `linux/amd64`. It may create normal local build output but does not tag,
+   publish, or mutate a deployment.
 3. Run:
    ```bash
    just release 0.2.3
    ```
-   It checks the tree is clean, on `main`, in sync with origin, and that
-   the version matches `pyproject.toml`. It also validates immutable asset
-   hashes, native architectures, and task-version changes, then signs and
-   pushes `v0.2.3`. CI repeats the checks before creating the release.
+   It checks the tree is clean, on `main`, in sync with origin, and repeats the
+   release preflight before it signs and pushes `v0.2.3`. CI repeats the checks
+   before creating the release.
 4. Watch it: `gh run watch`.
 
 ## Verifying a release before you deploy

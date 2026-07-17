@@ -43,6 +43,12 @@ import {
   WINDOW_AREA_MIN,
   WINDOW_AREA_STEP,
 } from "./constants";
+import {
+  prepareRunUi as prepareSharedRunUi,
+  restoreLastRun,
+  resumeRun,
+} from "../../../_shared_frontend/run_lifecycle";
+import type { RunUi as SharedRunUi } from "../../../_shared_frontend/run_lifecycle";
 import type {
   EnergyPlusConfig,
   EnergyPlusOutputs,
@@ -216,24 +222,27 @@ export const mount: MountFn = async (
     });
   });
 
-  const lastRun = config.last_run;
-  if (lastRun?.outputs) {
-    statusEl.textContent = "Showing your last result — adjust and run again.";
-    statusEl.style.color = "#16a34a";
-    resultsEl.replaceChildren(buildResultCards(lastRun.outputs));
-  } else if (lastRun?.run && !isTerminalStatus(lastRun.run.status)) {
-    submitButton.disabled = true;
-    const ui = prepareRunUi(statusEl, progressEl, helpers);
-    void pollRun(lastRun.run, {
-      submitButton,
-      resultsEl,
-      helpers,
-      ui,
-    });
-  } else if (lastRun?.run && isTerminalStatus(lastRun.run.status)) {
-    statusEl.textContent = "Your last run did not complete. You can try again.";
-    statusEl.style.color = "#dc2626";
-  }
+  restoreLastRun(config.last_run, {
+    onCompleted(saved) {
+      statusEl.textContent = "Showing your last result — adjust and run again.";
+      statusEl.style.color = "#16a34a";
+      resultsEl.replaceChildren(buildResultCards(saved.outputs as EnergyPlusOutputs));
+    },
+    onInFlight(run) {
+      submitButton.disabled = true;
+      const ui = prepareRunUi(statusEl, progressEl, helpers);
+      void pollRun(run, {
+        submitButton,
+        resultsEl,
+        helpers,
+        ui,
+      });
+    },
+    onIncomplete() {
+      statusEl.textContent = "Your last run did not complete. You can try again.";
+      statusEl.style.color = "#dc2626";
+    },
+  });
 };
 
 export default mount;
@@ -523,7 +532,7 @@ interface HandleSubmitArgs {
   helpers: MountHelpers;
 }
 
-interface RunUi {
+interface RunUi extends SharedRunUi {
   bar: ProgressBarController | null;
   setStatus(text: string, color?: string): void;
 }
@@ -590,46 +599,48 @@ function prepareRunUi(
   progressEl: HTMLElement,
   helpers: MountHelpers,
 ): RunUi {
-  const bar = helpers.ui?.createProgressBar?.() ?? null;
-  const setStatus = (text: string, color = "#6b7280"): void => {
-    if (bar) return;
-    statusEl.textContent = text;
-    statusEl.style.color = color;
+  const shared = prepareSharedRunUi({
+    statusEl,
+    progressEl,
+    createProgressBar: helpers.ui?.createProgressBar,
+    setFallbackStatus: (text) => {
+      statusEl.textContent = text;
+      statusEl.style.color = "#6b7280";
+    },
+    setFallbackVisible: (visible) => {
+      statusEl.style.display = visible ? "" : "none";
+    },
+  });
+  return {
+    ...shared,
+    setStatus(text: string, color = "#6b7280"): void {
+      if (shared.bar) return;
+      statusEl.textContent = text;
+      statusEl.style.color = color;
+    },
   };
-  if (bar) {
-    statusEl.style.display = "none";
-    statusEl.textContent = "";
-    progressEl.replaceChildren(bar.element);
-  } else {
-    statusEl.style.display = "";
-  }
-  return { bar, setStatus };
 }
 
 async function pollRun(run: RunReference, args: PollRunArgs): Promise<void> {
   const { submitButton, resultsEl, helpers, ui } = args;
-  const { bar, setStatus } = ui;
-  setStatus(activeStatusText(run.status));
-  bar?.update(null, activeStatusText(run.status));
   try {
-    for await (const status of helpers.api.pollStatus(run.id, {
-      intervalSeconds: run.poll_interval_seconds || 2,
-      deadlineAt: run.deadline_at,
-    })) {
-      if (status.is_terminal) {
-        renderTerminalResult(status, setStatus, resultsEl);
-        applyTerminalToBar(bar, status);
-        break;
-      }
-      setStatus(formatProgressLine(status));
-      bar?.update(
-        status.progress_pct,
-        status.progress_step || formatProgressLine(status),
-      );
-    }
-  } catch (err) {
-    setStatus(`Polling failed: ${humanizeError(err)}`, "#dc2626");
-    bar?.error("Run failed");
+    await resumeRun({
+      run,
+      pollStatus: (runId, options) => helpers.api.pollStatus(runId, options),
+      ui,
+      onTerminal(status) {
+        renderTerminalResult(status, ui.setStatus, resultsEl);
+        applyTerminalToBar(ui.bar, status);
+      },
+      onProgress(status, label) {
+        ui.setStatus(label);
+        ui.bar?.update(status.progress_pct, status.progress_step || label);
+      },
+      onPollingError(message) {
+        ui.setStatus(message, "#dc2626");
+        ui.bar?.error("Run failed");
+      },
+    });
   } finally {
     submitButton.disabled = false;
   }
@@ -650,16 +661,6 @@ function applyTerminalToBar(
   } else {
     bar.error("Run could not complete");
   }
-}
-
-function formatProgressLine(status: SimulationRunStatusResponse): string {
-  if (status.status !== "running") return activeStatusText(status.status);
-  const stepPart = status.progress_step ? ` — ${status.progress_step}` : "";
-  const pctPart =
-    typeof status.progress_pct === "number" && status.progress_pct > 0
-      ? ` (${status.progress_pct}%)`
-      : "";
-  return `Simulation is running${pctPart}${stepPart}…`;
 }
 
 function renderTerminalResult(
@@ -702,25 +703,6 @@ function renderTerminalResult(
   } else {
     resultsEl.replaceChildren();
   }
-}
-
-function activeStatusText(status: string): string {
-  if (isTerminalStatus(status)) return "Loading the completed result…";
-  if (status === "pending") return "Preparing your simulation…";
-  if (status === "dispatched") {
-    return "Starting the simulation environment… The first run can take a minute.";
-  }
-  return "Simulation is running…";
-}
-
-function isTerminalStatus(status: string): boolean {
-  return [
-    "success",
-    "failed_simulation",
-    "failed_runtime",
-    "cancelled",
-    "timed_out",
-  ].includes(status);
 }
 
 function buildResultCards(outputs: Partial<EnergyPlusOutputs>): HTMLDivElement {

@@ -19,6 +19,7 @@ else:
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SHARED_RUNTIME_PREFIX = "_shared_backends/purelms_itask_runtime/"
+SHARED_FRONTEND_PREFIX = "_shared_frontend/"
 GLOBAL_RELEASE_INPUTS = {
     ".github/workflows/release.yml",
     "backends.toml",
@@ -58,7 +59,8 @@ def release_inputs_by_slug(
     shared_changes = {
         path
         for path in changed_paths
-        if path.startswith(SHARED_RUNTIME_PREFIX) and _is_release_input(path)
+        if path.startswith((SHARED_RUNTIME_PREFIX, SHARED_FRONTEND_PREFIX))
+        and _is_release_input(path)
     }
     global_changes = changed_paths & GLOBAL_RELEASE_INPUTS
     for slug in slugs:

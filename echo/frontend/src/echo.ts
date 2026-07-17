@@ -16,6 +16,13 @@
 // Inline type definitions for the small dispatcher contract. Bundles vendor
 // this shape so a task release remains self-contained.
 
+import {
+  prepareRunUi as prepareSharedRunUi,
+  restoreLastRun,
+  resumeRun,
+} from "../../../_shared_frontend/run_lifecycle";
+import type { RunUi } from "../../../_shared_frontend/run_lifecycle";
+
 interface RunReference {
   id: string;
   status: string;
@@ -106,16 +113,32 @@ export async function mount(
   const state = buildFormUi(helpers, config.last_run);
   element.replaceChildren(state.root);
 
-  const lastRun = config.last_run;
-  if (lastRun?.outputs) {
-    renderSuccess(state.resultEl, lastRun.outputs, lastRun.run, lastRun.messages ?? []);
-    setStatus(state.statusEl, "Showing your last result — edit the value to run again.", "success");
-  } else if (lastRun?.run && !isTerminalStatus(lastRun.run.status)) {
-    state.submitBtn.disabled = true;
-    void pollRun(lastRun.run, state, prepareRunUi(state));
-  } else if (lastRun?.run && isTerminalStatus(lastRun.run.status)) {
-    setStatus(state.statusEl, "Your last run did not complete. You can try again.", "danger");
-  }
+  restoreLastRun(config.last_run, {
+    onCompleted(saved) {
+      renderSuccess(
+        state.resultEl,
+        saved.outputs as Record<string, unknown>,
+        saved.run,
+        saved.messages ?? [],
+      );
+      setStatus(
+        state.statusEl,
+        "Showing your last result — edit the value to run again.",
+        "success",
+      );
+    },
+    onInFlight(run) {
+      state.submitBtn.disabled = true;
+      void pollRun(run, state, prepareRunUi(state));
+    },
+    onIncomplete() {
+      setStatus(
+        state.statusEl,
+        "Your last run did not complete. You can try again.",
+        "danger",
+      );
+    },
+  });
 }
 
 function buildFormUi(
@@ -207,14 +230,14 @@ async function handleSubmit(state: SubmitState): Promise<void> {
       return;
     }
     const msg = (err as ApiError).detail ?? String(err);
-    ui.setStatus(`Submission failed: ${msg}`, "danger");
+    setStatus(statusEl, `Submission failed: ${msg}`, "danger");
     ui.bar?.error("Submission failed");
     submitBtn.disabled = false;
     return;
   }
 
   if (outcome.run === null) {
-    ui.setStatus("Run complete.", "success");
+    setStatus(statusEl, "Run complete.", "success");
     ui.bar?.complete("Run complete");
     submitBtn.disabled = false;
     return;
@@ -223,28 +246,16 @@ async function handleSubmit(state: SubmitState): Promise<void> {
   await pollRun(outcome.run, state, ui);
 }
 
-interface RunUi {
-  bar: ProgressBarController | null;
-  setStatus(text: string, tone?: "muted" | "success" | "danger"): void;
-}
-
 function prepareRunUi(state: SubmitState): RunUi {
-  const bar = state.helpers.ui?.createProgressBar?.() ?? null;
-  const setRunStatus = (
-    text: string,
-    tone: "muted" | "success" | "danger" = "muted",
-  ): void => {
-    if (bar) return;
-    setStatus(state.statusEl, text, tone);
-  };
-  if (bar) {
-    state.statusEl.hidden = true;
-    state.statusEl.textContent = "";
-    state.progressEl.replaceChildren(bar.element);
-  } else {
-    state.statusEl.hidden = false;
-  }
-  return { bar, setStatus: setRunStatus };
+  return prepareSharedRunUi({
+    statusEl: state.statusEl,
+    progressEl: state.progressEl,
+    createProgressBar: state.helpers.ui?.createProgressBar,
+    setFallbackStatus: (text) => setStatus(state.statusEl, text),
+    setFallbackVisible: (visible) => {
+      state.statusEl.hidden = !visible;
+    },
+  });
 }
 
 async function pollRun(
@@ -253,18 +264,17 @@ async function pollRun(
   ui: RunUi,
 ): Promise<void> {
   const { submitBtn, resultEl, helpers } = state;
-  ui.setStatus(activeStatusText(run.status));
-  ui.bar?.update(null, activeStatusText(run.status));
   try {
-    for await (const status of helpers.api.pollStatus(run.id, {
-      intervalSeconds: run.poll_interval_seconds || 2,
-      deadlineAt: run.deadline_at,
-    })) {
-      if (status.is_terminal) {
+    await resumeRun({
+      run,
+      pollStatus: (runId, options) => helpers.api.pollStatus(runId, options),
+      ui,
+      onTerminal(status) {
         renderTerminalResult(resultEl, status);
         if (status.status === "success") {
           const seconds = status.runtime_seconds?.toFixed(2);
-          ui.setStatus(
+          setStatus(
+            state.statusEl,
             seconds ? `Echo complete (${seconds}s).` : "Echo complete.",
             "success",
           );
@@ -273,25 +283,23 @@ async function pollRun(
           const learnerError = (status.messages ?? []).find(
             (message) => message.level === "error",
           );
-          ui.setStatus(
+          setStatus(
+            state.statusEl,
             learnerError?.text ?? "We couldn't complete this simulation. Please try again.",
             "danger",
           );
           ui.bar?.error("Run could not complete");
         }
-        break;
-      }
-      const label = activeStatusText(
-        status.status,
-        status.progress_pct,
-        status.progress_step,
-      );
-      ui.setStatus(label);
-      ui.bar?.update(status.progress_pct, status.progress_step || label);
-    }
-  } catch (err) {
-    ui.setStatus(`We lost contact with this run: ${String(err)}`, "danger");
-    ui.bar?.error("Run could not complete");
+      },
+      onProgress(status, label) {
+        ui.setStatus(label);
+        ui.bar?.update(status.progress_pct, status.progress_step || label);
+      },
+      onPollingError(message) {
+        setStatus(state.statusEl, message, "danger");
+        ui.bar?.error("Run could not complete");
+      },
+    });
   } finally {
     submitBtn.disabled = false;
   }
@@ -356,33 +364,6 @@ function renderSuccess(
 
   resultEl.replaceChildren(card);
   resultEl.hidden = false;
-}
-
-function activeStatusText(
-  status: string,
-  progressPct: number | null = null,
-  progressStep = "",
-): string {
-  if (isTerminalStatus(status)) return "Loading the completed result…";
-  if (status === "pending") return "Preparing your simulation…";
-  if (status === "dispatched") {
-    return "Starting the simulation environment… The first run can take a minute.";
-  }
-  const progress = typeof progressPct === "number" && progressPct > 0
-    ? ` (${progressPct}%)`
-    : "";
-  const step = progressStep ? ` — ${progressStep}` : "";
-  return `Simulation is running${progress}${step}…`;
-}
-
-function isTerminalStatus(status: string): boolean {
-  return [
-    "success",
-    "failed_simulation",
-    "failed_runtime",
-    "cancelled",
-    "timed_out",
-  ].includes(status);
 }
 
 function setStatus(

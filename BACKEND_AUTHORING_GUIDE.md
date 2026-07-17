@@ -699,6 +699,14 @@ interface MountHelpers {
 
 ### The submission + polling flow
 
+Official backends import the build-time helper at
+`_shared_frontend/run_lifecycle.ts` for this repeated lifecycle. It restores a
+prior run, presents `DISPATCHED` as environment startup rather than fabricated
+progress, polls at the server-provided cadence, and renders a safe transport
+failure. The helper is bundled into each task's own ES module; it is not a
+runtime cross-task dependency. Keep domain-specific controls, visualization,
+and terminal-result rendering in the task frontend.
+
 ```typescript
 async function handleSubmit(parameters: Record<string, unknown>) {
   // 1. POST the submission.
@@ -946,12 +954,45 @@ uv run python manage.py uninstall_interactive_task my_task --task-version 0.1.0
 uv run python manage.py uninstall_interactive_task my_task --all-inactive
 ```
 
-Hard-deletes registration row(s). **Blocked** when:
+This is development-only cleanup for an unreferenced registration. It
+hard-deletes registration row(s). **Blocked** when:
 
 - Any `SimulationRun` row has a PROTECT FK to the registration (historical evidence)
 - For the active row: any `InteractiveTaskBlock` references the slug
 
 (The flag is `--task-version` rather than `--version` because Django's `BaseCommand` reserves `--version` for printing the Django version.)
+
+Do not use it to remove a production backend release. Production history must
+follow the retirement workflow below so its pinned course, run, audit, Job,
+image, and bundle evidence remains intelligible.
+
+### Retire and purge a production backend version
+
+```bash
+# First make an alternate version active, then block and retire the old one.
+uv run python manage.py retire_interactive_task my_task 0.1.0 \
+  --actor-email operator@example.org --reason "Superseded by 0.2.0"
+
+# Inspect all retention and reference blockers. JSON is useful for an operator
+# record; --retention-days is planning-only and does not shorten production policy.
+uv run python manage.py plan_interactive_task_retirement my_task 0.1.0 \
+  --format json
+
+# Only after the plan is eligible, the static bundle is removed and deployed,
+# and the exact provider Job/image digest has been decommissioned:
+uv run python manage.py purge_retired_interactive_task my_task 0.1.0 \
+  --actor-email operator@example.org --reason "Retention elapsed" \
+  --confirmation-token <token-from-plan> \
+  --provider-artifacts-decommissioned --apply
+```
+
+Retirement blocks new launches and records an audit event; it does not delete
+anything. The plan refuses active, referenced, or still-retained versions and
+prints the exact static path, Cloud Run Job, and image digest. Provider cleanup
+and static-bundle deployment are separate, deliberate operations; the final
+purge deletes only the now-unreferenced registration and leaves the audit event
+as evidence. Run workspaces have their own retention policy and are never
+removed by backend retirement.
 
 ---
 

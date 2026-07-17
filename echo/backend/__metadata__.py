@@ -12,7 +12,7 @@ BACKEND_DESCRIPTION = (
     "writes a SUCCESS output envelope. Used as the LMS-side "
     "integration-test fixture — never delete."
 )
-BACKEND_VERSION = "0.1.5"
+BACKEND_VERSION = "0.1.6"
 
 # What the backend can do. Used by the LMS's authoring UI to show
 # course authors what parameter knobs exist + what metrics will be

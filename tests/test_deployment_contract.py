@@ -74,6 +74,23 @@ def test_release_inventory_drives_just_and_github_actions() -> None:
     assert "slug: [echo," not in RELEASE_WORKFLOW
 
 
+def test_release_preflight_runs_all_local_gates_before_tagging() -> None:
+    """A release must prove its declared assets before the signing step."""
+    assert "release-preflight VERSION:" in JUSTFILE
+    preflight = JUSTFILE.split("release-preflight VERSION:", maxsplit=1)[1]
+    preflight = preflight.split("# Bootstrap", maxsplit=1)[0]
+
+    assert "validate_release_assets.py" in preflight
+    assert "validate_release_versions.py --release-ref HEAD" in preflight
+    assert "just lint" in preflight
+    assert "just test-all" in preflight
+    assert "just frontend-build-all" in preflight
+    assert "just smoke-all" in preflight
+
+    release = JUSTFILE.split("release VERSION:", maxsplit=1)[1]
+    assert 'just release-preflight "{{ VERSION }}"' in release
+
+
 def test_registration_catalog_uses_tagged_inventory_and_manifests() -> None:
     """Deployment registration pairs every declared manifest with one image."""
     tagged_inventory = tomllib.loads(
@@ -173,6 +190,7 @@ def test_release_version_gate_scopes_task_and_shared_runtime_changes() -> None:
             "energyplus_single_zone/backend/tests/test_main.py",
             "modelica_diagram/README.md",
             "_shared_backends/purelms_itask_runtime/src/runtime.py",
+            "_shared_frontend/run_lifecycle.ts",
         },
         {"echo", "energyplus_single_zone", "modelica_diagram"},
     )
@@ -181,6 +199,9 @@ def test_release_version_gate_scopes_task_and_shared_runtime_changes() -> None:
     assert all(
         "_shared_backends/purelms_itask_runtime/src/runtime.py" in paths
         for paths in affected.values()
+    )
+    assert all(
+        "_shared_frontend/run_lifecycle.ts" in paths for paths in affected.values()
     )
     assert all("pyproject.toml" in paths for paths in affected.values())
     assert not any(

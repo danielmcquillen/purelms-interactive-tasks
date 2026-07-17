@@ -424,6 +424,31 @@ lint:
 # Release  (mirrors validibot-validator-backends' `just release`)
 # ---------------------------------------------------------------------
 
+# Run every release-relevant local check against the committed candidate before
+# creating its signed tag. This command has no side effects beyond normal test
+# and frontend-build output; it neither tags nor publishes.
+#
+# Usage: just release-preflight 0.2.8
+release-preflight VERSION:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ ! "{{ VERSION }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "✗ Version must be X.Y.Z; got: {{ VERSION }}"
+        exit 1
+    fi
+    TOML_VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -1)
+    if [ "${TOML_VERSION}" != "{{ VERSION }}" ]; then
+        echo "✗ pyproject.toml version (${TOML_VERSION}) != {{ VERSION }}."
+        exit 1
+    fi
+    python3 scripts/validate_release_assets.py
+    python3 scripts/validate_release_versions.py --release-ref HEAD
+    just lint
+    just test-all
+    just frontend-build-all
+    just smoke-all
+    echo "✓ Release preflight passed for v{{ VERSION }}."
+
 # One-time keyless GitHub Actions → GAR setup for the signed release workflow.
 #
 # Creates an exact-repository Workload Identity Federation provider, a
@@ -622,10 +647,8 @@ release VERSION:
         exit 1
     fi
 
-    # Fail before creating a signed tag if an immutable manifest asset has
-    # drifted or an embedded native binary cannot execute on Cloud Run.
-    python3 scripts/validate_release_assets.py
-    python3 scripts/validate_release_versions.py --release-ref HEAD
+    # Validate every release input before creating an irreversible signed tag.
+    just release-preflight "{{ VERSION }}"
 
     # purelms-shared freshness — informational. Release images resolve the
     # declared contract floor exactly, so this only flags a newer compatible

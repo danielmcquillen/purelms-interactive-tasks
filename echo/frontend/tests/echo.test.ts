@@ -10,6 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, mountContract } from "../src/echo.js";
+import { restoreLastRun, resumeRun } from "../../../_shared_frontend/run_lifecycle.js";
 
 interface CapturedSubmit {
   parameters: Record<string, unknown>;
@@ -344,5 +345,64 @@ describe("echo mount()", () => {
 
     const status = host.querySelector(".purelms-echo-task .small");
     expect(status?.textContent).toContain("tier gate");
+  });
+});
+
+describe("shared run lifecycle", () => {
+  it("restores a saved result instead of resuming its terminal run", () => {
+    const completed = vi.fn();
+    const inFlight = vi.fn();
+    const incomplete = vi.fn();
+
+    restoreLastRun(
+      {
+        run: {
+          id: "complete-123",
+          status: "success",
+          status_url: "",
+          poll_interval_seconds: 2,
+          websocket_url: null,
+          deadline_at: null,
+        },
+        outputs: { echoed_parameters: { value: "saved" } },
+      },
+      { onCompleted: completed, onInFlight: inFlight, onIncomplete: incomplete },
+    );
+
+    expect(completed).toHaveBeenCalledOnce();
+    expect(inFlight).not.toHaveBeenCalled();
+    expect(incomplete).not.toHaveBeenCalled();
+  });
+
+  it("does not expose a polling transport error to the learner", async () => {
+    const onPollingError = vi.fn();
+    async function* pollStatus(): AsyncIterable<{
+      status: string;
+      is_terminal: boolean;
+      progress_pct: number | null;
+      progress_step: string;
+    }> {
+      throw new Error("provider endpoint leaked a secret");
+    }
+
+    await resumeRun({
+      run: {
+        id: "broken-123",
+        status: "dispatched",
+        status_url: "",
+        poll_interval_seconds: 2,
+        websocket_url: null,
+        deadline_at: null,
+      },
+      pollStatus,
+      ui: { bar: null, setStatus: vi.fn() },
+      onTerminal: vi.fn(),
+      onProgress: vi.fn(),
+      onPollingError,
+    });
+
+    expect(onPollingError).toHaveBeenCalledWith(
+      "We lost contact with this simulation. Please try again.",
+    );
   });
 });

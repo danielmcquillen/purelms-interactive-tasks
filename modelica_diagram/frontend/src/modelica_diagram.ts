@@ -20,6 +20,12 @@
 import { createCanvas } from "./canvas";
 import type { CanvasHandle } from "./canvas";
 import { injectStyles } from "./styles";
+import {
+  prepareRunUi as prepareSharedRunUi,
+  restoreLastRun,
+  resumeRun,
+} from "../../../_shared_frontend/run_lifecycle";
+import type { RunUi } from "../../../_shared_frontend/run_lifecycle";
 import type {
   Diagram,
   Layout,
@@ -28,7 +34,6 @@ import type {
   ModelicaOutputs,
   MountFn,
   MountHelpers,
-  ProgressBarController,
   RunReference,
   Scenario,
   SimulationRunMessage,
@@ -141,23 +146,34 @@ export const mount: MountFn = async (element, configRaw, helpers): Promise<void>
     });
   });
 
-  // Restore the learner's last attempt (diagram + last result). The sliders are
-  // already seeded from config.last_run inside buildParams.
-  restoreLastRun(config.last_run, canvas, statusEl, resultsEl);
-  if (config.last_run?.run && !isTerminalStatus(config.last_run.run.status)) {
-    runBtn.disabled = true;
-    const ui = prepareRunUi(statusEl, progressEl, helpers);
-    void pollRun(
-      config.last_run.run,
-      { runBtn, statusEl, progressEl, resultsEl, helpers },
-      ui,
-    );
-  } else if (
-    config.last_run?.run &&
-    isTerminalStatus(config.last_run.run.status) &&
-    !config.last_run.outputs
-  ) {
-    statusEl.textContent = "Your last run did not complete. You can try again.";
+  // Sliders are restored in buildParams; the shared helper chooses whether the
+  // last run is a result to render, an in-flight run to resume, or a retryable
+  // terminal outcome.
+  const restoredDiagram = restoreDiagram(config.last_run, canvas);
+  restoreLastRun(config.last_run, {
+    onCompleted(saved) {
+      renderSuccessOutputs(
+        saved.outputs as Partial<ModelicaOutputs>,
+        saved.messages ?? [],
+        resultsEl,
+      );
+      statusEl.textContent = "Showing your last result — adjust and run again.";
+    },
+    onInFlight(run) {
+      runBtn.disabled = true;
+      const ui = prepareRunUi(statusEl, progressEl, helpers);
+      void pollRun(
+        run,
+        { runBtn, statusEl, progressEl, resultsEl, helpers },
+        ui,
+      );
+    },
+    onIncomplete() {
+      statusEl.textContent = "Your last run did not complete. You can try again.";
+    },
+  });
+  if (config.last_run && !config.last_run.run && !config.last_run.outputs && restoredDiagram) {
+    statusEl.textContent = "Restored your last diagram — run it again to simulate.";
   }
 };
 
@@ -321,28 +337,22 @@ interface PollRunArgs {
   helpers: MountHelpers;
 }
 
-interface RunUi {
-  bar: ProgressBarController | null;
-  setStatus(text: string): void;
-}
-
 function prepareRunUi(
   statusEl: HTMLElement,
   progressEl: HTMLElement,
   helpers: MountHelpers,
 ): RunUi {
-  const bar = helpers.ui?.createProgressBar?.() ?? null;
-  const setRunStatus = (text: string): void => {
-    if (!bar) statusEl.textContent = text;
-  };
-  if (bar) {
-    statusEl.hidden = true;
-    statusEl.textContent = "";
-    progressEl.replaceChildren(bar.element);
-  } else {
-    statusEl.hidden = false;
-  }
-  return { bar, setStatus: setRunStatus };
+  return prepareSharedRunUi({
+    statusEl,
+    progressEl,
+    createProgressBar: helpers.ui?.createProgressBar,
+    setFallbackStatus: (text) => {
+      statusEl.textContent = text;
+    },
+    setFallbackVisible: (visible) => {
+      statusEl.hidden = !visible;
+    },
+  });
 }
 
 async function pollRun(
@@ -351,33 +361,28 @@ async function pollRun(
   ui: RunUi,
 ): Promise<void> {
   const { runBtn, resultsEl, helpers } = args;
-  ui.setStatus(activeStatusText(run.status));
-  ui.bar?.update(null, activeStatusText(run.status));
   try {
-    for await (const status of helpers.api.pollStatus(run.id, {
-      intervalSeconds: run.poll_interval_seconds || 1,
-      deadlineAt: run.deadline_at,
-    })) {
-      if (status.is_terminal) {
+    await resumeRun({
+      run,
+      pollStatus: (runId, options) => helpers.api.pollStatus(runId, options),
+      ui,
+      onTerminal(status) {
         renderResult(status, resultsEl, ui.setStatus);
         if (status.status === "success") {
           ui.bar?.complete(`Done (${(status.runtime_seconds ?? 0).toFixed(2)}s)`);
         } else {
           ui.bar?.error("Run could not complete");
         }
-        break;
-      }
-      const label = activeStatusText(
-        status.status,
-        status.progress_pct,
-        status.progress_step,
-      );
-      ui.setStatus(label);
-      ui.bar?.update(status.progress_pct, status.progress_step || label);
-    }
-  } catch (err) {
-    ui.setStatus(`We lost contact with this run: ${humanize(err)}`);
-    ui.bar?.error("Run could not complete");
+      },
+      onProgress(status, label) {
+        ui.setStatus(label);
+        ui.bar?.update(status.progress_pct, status.progress_step || label);
+      },
+      onPollingError(message) {
+        ui.setStatus(message);
+        ui.bar?.error("Run could not complete");
+      },
+    });
   } finally {
     runBtn.disabled = false;
   }
@@ -404,33 +409,6 @@ function renderResult(
     status.messages ?? [],
     resultsEl,
   );
-}
-
-function activeStatusText(
-  status: string,
-  progressPct: number | null = null,
-  progressStep = "",
-): string {
-  if (isTerminalStatus(status)) return "Loading the completed result…";
-  if (status === "pending") return "Preparing your simulation…";
-  if (status === "dispatched") {
-    return "Starting the simulation environment… The first run can take a minute.";
-  }
-  const progress = typeof progressPct === "number" && progressPct > 0
-    ? ` (${progressPct}%)`
-    : "";
-  const step = progressStep ? ` — ${progressStep}` : "";
-  return `Simulation is running${progress}${step}…`;
-}
-
-function isTerminalStatus(status: string): boolean {
-  return [
-    "success",
-    "failed_simulation",
-    "failed_runtime",
-    "cancelled",
-    "timed_out",
-  ].includes(status);
 }
 
 /** Render the verdict + notes + result cards + chart for a successful run.
@@ -463,16 +441,13 @@ function renderSuccessOutputs(
   }
 }
 
-/** Restore the learner's last attempt: rebuild the canvas from the stored
- * diagram and re-render the last result. Sliders are restored in buildParams. */
-function restoreLastRun(
+/** Restore the learner's diagram; result/run lifecycle belongs to the shared helper. */
+function restoreDiagram(
   lastRun: ModelicaLastRun | undefined,
   canvas: CanvasHandle | null,
-  statusEl: HTMLElement,
-  resultsEl: HTMLElement,
-): void {
+): boolean {
   if (!lastRun) {
-    return;
+    return false;
   }
   const diagramJson = lastRun.parameters?.["diagram_json"];
   const layoutJson = lastRun.parameters?.["layout_json"];
@@ -492,12 +467,7 @@ function restoreLastRun(
       // Malformed stored diagram/layout — leave the canvas empty.
     }
   }
-  if (lastRun.outputs) {
-    renderSuccessOutputs(lastRun.outputs, lastRun.messages ?? [], resultsEl);
-    statusEl.textContent = "Showing your last result — adjust and run again.";
-  } else if (restoredDiagram) {
-    statusEl.textContent = "Restored your last diagram — run it again to simulate.";
-  }
+  return restoredDiagram;
 }
 
 function messageList(
