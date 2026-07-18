@@ -440,14 +440,19 @@ def test_template_starts_above_patched_test_toolchain_floors() -> None:
     assert _version_tuple(dependencies["happy-dom"]) >= (20, 8, 9)
 
 
-def test_publish_uses_cloud_run_architecture_and_no_latest_tag() -> None:
-    """The local recovery publisher cannot push an Apple-Silicon image/latest."""
+def test_publish_uses_cloud_run_architecture_and_immutable_tags() -> None:
+    """The local recovery publisher cannot push ARM/latest or overwrite a tag."""
     recipe = _recipe("publish", "push")
 
     assert "--platform {{ target_platform }}" in recipe
     assert 'target_platform := "linux/amd64"' in JUSTFILE
     assert "--push" in recipe
     assert ":latest" not in recipe
+    assert 'gcloud artifacts docker images list "${IMAGE}"' in recipe
+    assert "--include-tags" in recipe
+    assert '--filter="tags:${TAG}"' in recipe
+    assert "--limit=1" in recipe
+    assert "Refusing to overwrite existing immutable image tag" in recipe
 
 
 def test_local_build_uses_cloud_run_architecture() -> None:

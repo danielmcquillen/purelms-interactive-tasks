@@ -104,6 +104,11 @@ publish slug image_tag="": (_stage-shared-wheel slug) _validate-release-assets
         echo "  Source the PureLMS GCP .just file, then retry."
         exit 1
     fi
+    if [ -z "${GCP_PROJECT_ID:-}" ]; then
+        echo "✗ GCP_PROJECT_ID is not set."
+        echo "  Source the PureLMS GCP .just file, then retry."
+        exit 1
+    fi
 
     VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -1)
     TAG="{{ image_tag }}"
@@ -114,6 +119,21 @@ publish slug image_tag="": (_stage-shared-wheel slug) _validate-release-assets
     fi
     IMAGE_SLUG=$(printf '%s' "{{ slug }}" | tr '_' '-')
     IMAGE="${REGISTRY}/purelms-itask-${IMAGE_SLUG}"
+    # Artifact Registry accepts an empty list for an image/tag that has not
+    # been published, but returns an error for access or registry failures.
+    # With set -e, those errors stop here instead of permitting an overwrite.
+    EXISTING_DIGEST=$(gcloud artifacts docker images list "${IMAGE}" \
+        --include-tags \
+        --filter="tags:${TAG}" \
+        --limit=1 \
+        --project="${GCP_PROJECT_ID}" \
+        --format='value(version)')
+    if [ -n "${EXISTING_DIGEST}" ]; then
+        echo "✗ Refusing to overwrite existing immutable image tag ${IMAGE}:${TAG}."
+        echo "  Existing digest: ${EXISTING_DIGEST}"
+        echo "  Publish a new SemVer release tag instead."
+        exit 1
+    fi
     echo "Building and publishing ${IMAGE}:${TAG} (linux/amd64)..."
     docker buildx build \
         --platform {{ target_platform }} \

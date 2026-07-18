@@ -153,8 +153,9 @@ runtime mints a fresh OIDC token for every delivery attempt and refuses to send
 an anonymous callback if token minting fails.
 
 For a deliberate local publish (development or recovery), `just publish
-<slug>` builds linux/amd64 and pushes only the immutable `vX.Y.Z` tag. It does
-not replace the signed release workflow for normal production releases.
+<slug>` builds linux/amd64 and pushes only a previously unused immutable
+`vX.Y.Z` tag. It refuses to overwrite an existing Artifact Registry tag. It
+does not replace the signed release workflow for normal production releases.
 
 ## Security
 
