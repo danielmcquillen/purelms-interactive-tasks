@@ -315,14 +315,27 @@ describe("echo mount()", () => {
         },
       ],
     });
+    const error = vi.fn();
+    Object.assign(helpers, {
+      ui: {
+        createProgressBar: () => ({
+          element: document.createElement("div"),
+          update: vi.fn(),
+          indeterminate: vi.fn(),
+          complete: vi.fn(),
+          error,
+          remove: vi.fn(),
+        }),
+      },
+    });
     await mount(host, {}, helpers as never);
 
     host.querySelector<HTMLFormElement>("form")!.requestSubmit();
     await new Promise((r) => setTimeout(r, 10));
 
-    const status = host.querySelector(".purelms-echo-task .small");
-    expect(status?.textContent).toContain("Please try again");
-    expect(status?.textContent).not.toContain("failed_runtime");
+    expect(error).toHaveBeenCalledWith(
+      "We couldn't complete this simulation. Please try again.",
+    );
   });
 
   it("surfaces submit errors", async () => {

@@ -11,14 +11,13 @@ import zipfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-ASSET_PATTERN = re.compile(
-    r'^\s*- path:\s*["\']?([^"\'\n]+?)["\']?\s*\n'
-    r'^\s+sha256:\s*["\']?([0-9a-f]{64})["\']?\s*$',
-    re.MULTILINE,
-)
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 ELF_MAGIC = b"\x7fELF"
 ELF_MACHINE_X86_64 = 62
 ELF_HEADER_MIN_BYTES = 20
+ASSET_LIST_INDENT = 2
+ASSET_FIELD_INDENT = 4
+MIN_QUOTED_SCALAR_LENGTH = 2
 
 
 def _sha256(path: Path) -> str:
@@ -70,16 +69,75 @@ def _validate_fmu(path: Path) -> list[str]:
     return errors
 
 
+def manifest_asset_entries(manifest_text: str) -> list[dict[str, str]]:
+    """Read the simple ``assets`` list from an InteractiveTask manifest.
+
+    Release preflight deliberately has no third-party YAML dependency: it runs
+    with the system Python before the backend environment is assembled. The
+    manifest's assets section is a constrained list of scalar mappings, so this
+    small parser supports that shape while accepting fields in either order.
+    It does not attempt to interpret the rest of the manifest.
+    """
+    entries: list[dict[str, str]] = []
+    in_assets = False
+    current: dict[str, str] | None = None
+    for raw_line in manifest_text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indentation = len(raw_line) - len(raw_line.lstrip())
+        if not in_assets:
+            if indentation == 0 and _yaml_scalar(stripped) == "assets:":
+                in_assets = True
+            continue
+        if indentation == 0:
+            break
+        if indentation == ASSET_LIST_INDENT and stripped.startswith("-"):
+            current = {}
+            entries.append(current)
+            field = stripped[1:].strip()
+        elif indentation >= ASSET_FIELD_INDENT and current is not None:
+            field = stripped
+        else:
+            continue
+        key, separator, value = field.partition(":")
+        if separator and key.strip():
+            current[key.strip()] = _yaml_scalar(value)
+    return entries
+
+
+def _yaml_scalar(value: str) -> str:
+    """Return a scalar's unquoted value for the constrained assets grammar."""
+    value = value.strip()
+    if (
+        len(value) >= MIN_QUOTED_SCALAR_LENGTH
+        and value[0] == value[-1]
+        and value[0] in {"'", '"'}
+    ):
+        return value[1:-1]
+    return value.split(" #", maxsplit=1)[0].strip()
+
+
 def validate_release_assets() -> list[str]:
     """Return all manifest-integrity and native-architecture errors."""
     errors: list[str] = []
     asset_count = 0
     for manifest in sorted(REPO_ROOT.glob("*/interactive_task.yaml")):
         task_root = manifest.parent
-        matches = ASSET_PATTERN.findall(manifest.read_text(encoding="utf-8"))
-        for relative_path, expected_digest in matches:
+        entries = manifest_asset_entries(manifest.read_text(encoding="utf-8"))
+        for entry in entries:
             asset_count += 1
+            relative_path = entry.get("path", "")
+            expected_digest = entry.get("sha256", "")
+            if not relative_path or not SHA256_RE.fullmatch(expected_digest):
+                errors.append(
+                    f"{manifest.name}: each asset needs path and lowercase SHA-256",
+                )
+                continue
             asset = task_root / relative_path.strip()
+            if not asset.resolve().is_relative_to(task_root.resolve()):
+                errors.append(f"{manifest.name}: asset path escapes its task root")
+                continue
             if not asset.is_file():
                 errors.append(f"{manifest.name}: missing asset {relative_path}")
                 continue

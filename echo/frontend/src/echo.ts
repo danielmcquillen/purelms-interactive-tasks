@@ -230,14 +230,15 @@ async function handleSubmit(state: SubmitState): Promise<void> {
       return;
     }
     const msg = (err as ApiError).detail ?? String(err);
-    setStatus(statusEl, `Submission failed: ${msg}`, "danger");
-    ui.bar?.error("Submission failed");
+    const failureText = `Submission failed: ${msg}`;
+    ui.setStatus(failureText);
+    ui.bar?.error(failureText);
     submitBtn.disabled = false;
     return;
   }
 
   if (outcome.run === null) {
-    setStatus(statusEl, "Run complete.", "success");
+    ui.setStatus("Run complete.");
     ui.bar?.complete("Run complete");
     submitBtn.disabled = false;
     return;
@@ -273,22 +274,20 @@ async function pollRun(
         renderTerminalResult(resultEl, status);
         if (status.status === "success") {
           const seconds = status.runtime_seconds?.toFixed(2);
-          setStatus(
-            state.statusEl,
-            seconds ? `Echo complete (${seconds}s).` : "Echo complete.",
-            "success",
-          );
-          ui.bar?.complete(seconds ? `Echo complete (${seconds}s)` : "Echo complete");
+          const completionText = seconds
+            ? `Echo complete (${seconds}s).`
+            : "Echo complete.";
+          ui.setStatus(completionText);
+          ui.bar?.complete(completionText);
         } else {
           const learnerError = (status.messages ?? []).find(
             (message) => message.level === "error",
           );
-          setStatus(
-            state.statusEl,
-            learnerError?.text ?? "We couldn't complete this simulation. Please try again.",
-            "danger",
-          );
-          ui.bar?.error("Run could not complete");
+          const failureText =
+            learnerError?.text ??
+            "We couldn't complete this simulation. Please try again.";
+          ui.setStatus(failureText);
+          ui.bar?.error(failureText);
         }
       },
       onProgress(status, label) {
@@ -296,8 +295,8 @@ async function pollRun(
         ui.bar?.update(status.progress_pct, status.progress_step || label);
       },
       onPollingError(message) {
-        setStatus(state.statusEl, message, "danger");
-        ui.bar?.error("Run could not complete");
+        ui.setStatus(message);
+        ui.bar?.error(message);
       },
     });
   } finally {

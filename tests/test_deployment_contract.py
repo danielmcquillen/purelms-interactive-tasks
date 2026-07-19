@@ -17,6 +17,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from scripts.backend_inventory import build_registration_catalog  # noqa: E402
 from scripts.backend_inventory import cloud_run_job_name  # noqa: E402
 from scripts.backend_inventory import manifest_version  # noqa: E402
+from scripts.validate_release_assets import manifest_asset_entries  # noqa: E402
 from scripts.validate_release_assets import validate_release_assets  # noqa: E402
 from scripts.validate_release_versions import release_inputs_by_slug  # noqa: E402
 from scripts.validate_release_versions import semver_key  # noqa: E402
@@ -479,6 +480,19 @@ def test_native_binary_images_reject_accidental_arm64_builds() -> None:
 def test_release_assets_match_manifests_and_cloud_run_architecture() -> None:
     """Pinned assets are intact and embedded FMU binaries are x86-64."""
     assert validate_release_assets() == []
+
+
+def test_release_asset_parser_accepts_manifest_fields_in_any_order() -> None:
+    """Asset validation must not silently skip a valid reordered mapping."""
+    digest = "a" * 64
+
+    assert manifest_asset_entries(
+        f"""
+assets:
+  - sha256: \"{digest}\"
+    path: backend/scenarios/example.json
+""",
+    ) == [{"sha256": digest, "path": "backend/scenarios/example.json"}]
 
 
 def test_release_workflow_validates_assets_and_versions_before_release() -> None:
