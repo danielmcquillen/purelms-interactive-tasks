@@ -218,6 +218,73 @@ def test_run_energyplus_uses_native_api_progress(monkeypatch, tmp_path):
     assert deleted_states
 
 
+def test_run_energyplus_stops_cleanly_when_its_deadline_expires(monkeypatch, tmp_path):
+    """The watchdog produces a backend failure instead of an outer container kill."""
+    stopped_states: list[object] = []
+
+    class FakeTimer:
+        """Timer double that expires as soon as EnergyPlus starts."""
+
+        def __init__(self, _seconds, callback):
+            self.callback = callback
+            self.daemon = False
+
+        def start(self):
+            self.callback()
+
+        def cancel(self):
+            return None
+
+    class FakeStateManager:
+        """Minimal state manager for the timeout path."""
+
+        def new_state(self):
+            return object()
+
+        def delete_state(self, _state):
+            return None
+
+    class FakeRuntime:
+        """Runtime double that accepts the stop request then returns normally."""
+
+        def callback_progress(self, _state, _callback):
+            return None
+
+        def callback_message(self, _state, _callback):
+            return None
+
+        def stop_simulation(self, state):
+            stopped_states.append(state)
+
+        def run_energyplus(self, _state, _args):
+            return 0
+
+    class FakeEnergyPlusAPI:
+        """Container for the timeout-aware Runtime API double."""
+
+        def __init__(self):
+            self.runtime = FakeRuntime()
+            self.state_manager = FakeStateManager()
+
+    package = types.ModuleType("pyenergyplus")
+    api_module = types.ModuleType("pyenergyplus.api")
+    api_module.EnergyPlusAPI = FakeEnergyPlusAPI
+    monkeypatch.setitem(sys.modules, "pyenergyplus", package)
+    monkeypatch.setitem(sys.modules, "pyenergyplus.api", api_module)
+    monkeypatch.setattr(runner.threading, "Timer", FakeTimer)
+
+    returncode, _output, error = runner._run_energyplus(
+        tmp_path / "in.idf",
+        tmp_path / "weather.epw",
+        tmp_path,
+        timeout_seconds=30,
+    )
+
+    assert returncode == 1
+    assert stopped_states
+    assert "exceeded its 30s runtime limit" in error
+
+
 # ---------------------------------------------------------------------
 # Climate data invariants
 # ---------------------------------------------------------------------

@@ -166,6 +166,29 @@ def test_read_input_gcs(monkeypatch):
     assert parsed.backend_slug == "echo"
 
 
+def test_read_input_rejects_gcs_generation_mismatch(monkeypatch):
+    """Strict GCS input identifies one immutable object generation, not just bytes."""
+    ctx = _context(progress_url=_PROGRESS_URL, complete_url=_COMPLETE_URL)
+    env = _input_envelope(ctx)
+    monkeypatch.setattr(
+        rt,
+        "_http_get_bytes",
+        lambda _url, **_kwargs: (env.model_dump_json().encode(), 7),
+    )
+    loc = RuntimeLocation(
+        run_id="r",
+        input_uri="gs://bucket/runs/1/input.json",
+        output_uri="gs://bucket/runs/1/output.json",
+        input_dir=rt.Path("/purelms/input"),
+        output_dir=rt.Path("/purelms/output"),
+        input_generation=8,
+        input_fetch_url="https://signed.example/input",
+    )
+
+    with pytest.raises(rt.RuntimeConfigError, match="generation mismatch"):
+        read_input_envelope(loc)
+
+
 # ---------------------------------------------------------------------
 # make_progress_reporter
 # ---------------------------------------------------------------------

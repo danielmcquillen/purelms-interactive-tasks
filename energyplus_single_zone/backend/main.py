@@ -76,7 +76,11 @@ def main() -> int:
     # sync run is observed via its output envelope, not callbacks.
     on_progress = make_progress_reporter(envelope.context, started_at)
     try:
-        outputs = simulate(envelope.parameters, on_progress=on_progress)
+        outputs = simulate(
+            envelope.parameters,
+            on_progress=on_progress,
+            timeout_seconds=envelope.context.timeout_seconds,
+        )
         status = OutputStatus.SUCCESS
         messages = [
             Message.model_validate(

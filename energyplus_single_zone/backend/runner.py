@@ -51,6 +51,7 @@ import shutil
 import sqlite3
 import string
 import tempfile
+import threading
 from collections import deque
 from collections.abc import Callable
 from pathlib import Path
@@ -125,6 +126,7 @@ def simulate(
     parameters: dict[str, Any],
     *,
     on_progress: ProgressFn | None = None,
+    timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Run the single-zone simulation; return the manifest's outputs dict.
 
@@ -147,6 +149,9 @@ def simulate(
             deployments surface a determinate progress bar. The
             analytical path is effectively instantaneous, so it only
             emits the bookend phases.
+        timeout_seconds: Maximum real-EnergyPlus runtime. ``main.py`` passes
+            the execution envelope deadline; ``None`` leaves direct library
+            calls unbounded for local diagnostics.
 
     Returns:
         Dict whose keys match the manifest's ``outputs[].name`` exactly:
@@ -185,6 +190,7 @@ def simulate(
             area=area,
             zone=zone,
             on_progress=emit,
+            timeout_seconds=timeout_seconds,
         )
     else:
         emit(50, "Running analytical model")
@@ -220,6 +226,7 @@ def _simulate_energyplus(
     area: float,
     zone: ClimateZone,
     on_progress: ProgressFn | None = None,
+    timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Build an IDF, run EnergyPlus against the zone's EPW, mine the SQL."""
     emit = on_progress if on_progress is not None else _noop_progress
@@ -252,6 +259,7 @@ def _simulate_energyplus(
         epw_path,
         work_dir,
         on_progress=emit,
+        timeout_seconds=timeout_seconds,
     )
 
     err_path = work_dir / "eplusout.err"
@@ -319,19 +327,46 @@ def build_idf(parameters: dict[str, Any]) -> str:
     )
 
 
+def _start_timeout_watchdog(
+    runtime: Any,
+    state: Any,
+    timeout_seconds: float | None,
+) -> tuple[threading.Event, threading.Timer | None]:
+    """Ask EnergyPlus to stop if its bounded execution time elapses."""
+    timed_out = threading.Event()
+    if timeout_seconds is None:
+        return timed_out, None
+
+    def stop_for_timeout() -> None:
+        """Request Runtime API shutdown without killing the container."""
+        timed_out.set()
+        try:
+            runtime.stop_simulation(state)
+        except Exception:
+            logger.exception("EnergyPlus timeout shutdown request failed")
+
+    timer = threading.Timer(timeout_seconds, stop_for_timeout)
+    timer.daemon = True
+    timer.start()
+    return timed_out, timer
+
+
 def _run_energyplus(
     idf_path: Path,
     epw_path: Path,
     work_dir: Path,
     *,
     on_progress: ProgressFn | None = None,
+    timeout_seconds: float | None = None,
 ) -> tuple[int, str, str]:
     """Run EnergyPlus through its Runtime API with native progress callbacks.
 
     The EnergyPlus 25.2 Python API reports a genuine 0-100 simulation
     percentage. It is mapped into 10-90% of the backend lifecycle before being
-    handed to the shared quarter-step/time throttler. The execution provider
-    remains the hard timeout/process boundary for the container.
+    handed to the shared quarter-step/time throttler. When a deadline is
+    supplied, a watchdog asks the Runtime API to stop cleanly so the caller
+    can write a ``FAILED_RUNTIME`` output envelope before the container's
+    outer timeout.
 
     Returns ``(returncode, captured_messages, error)``. API setup/runtime
     exceptions become a non-zero result so the caller writes a clean
@@ -370,6 +405,14 @@ def _run_energyplus(
         text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
         messages.append(text.strip())
 
+    if timeout_seconds is not None and timeout_seconds <= 0:
+        return 1, "", "EnergyPlus timeout_seconds must be positive"
+    timed_out, timeout_timer = _start_timeout_watchdog(
+        api.runtime,
+        state,
+        timeout_seconds,
+    )
+
     try:
         api.runtime.callback_progress(state, report_tool_progress)
         api.runtime.callback_message(state, capture_message)
@@ -378,11 +421,16 @@ def _run_energyplus(
         returncode = 1
         messages.append(f"EnergyPlus Runtime API failed: {exc}")
     finally:
+        if timeout_timer is not None:
+            timeout_timer.cancel()
         try:
             api.state_manager.delete_state(state)
         except Exception:
             logger.exception("EnergyPlus state cleanup failed")
 
+    if timed_out.is_set():
+        returncode = 1
+        messages.append(f"EnergyPlus exceeded its {timeout_seconds:g}s runtime limit")
     captured = "\n".join(message for message in messages if message)
     logger.info("energyplus returncode=%d", returncode)
     return returncode, captured, captured

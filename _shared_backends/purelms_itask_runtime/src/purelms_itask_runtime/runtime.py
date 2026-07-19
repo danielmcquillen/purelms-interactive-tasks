@@ -230,6 +230,9 @@ class RuntimeLocation:
         if input_size is not None and input_size < 0:
             msg = "PURELMS_INPUT_SIZE_BYTES must be non-negative"
             raise RuntimeConfigError(msg)
+        if input_generation is not None and input_generation < 1:
+            msg = "PURELMS_INPUT_GENERATION must be a positive GCS generation"
+            raise RuntimeConfigError(msg)
         if (
             input_uri is not None
             and input_sha256 is not None
@@ -270,10 +273,19 @@ def read_input_envelope(location: RuntimeLocation) -> SimulationInputEnvelope:
     """
     max_bytes = _max_envelope_bytes()
     if location.uses_gcs_input:
-        raw_bytes, _generation = _http_get_bytes(
+        raw_bytes, generation = _http_get_bytes(
             location.input_fetch_url,  # type: ignore[arg-type]
             max_bytes=max_bytes,
         )
+        if (
+            location.input_generation is not None
+            and generation != location.input_generation
+        ):
+            msg = (
+                "input envelope generation mismatch: "
+                f"expected {location.input_generation}, got {generation}"
+            )
+            raise RuntimeConfigError(msg)
     else:
         input_path = location.input_dir / "input.json"
         if not input_path.exists():
