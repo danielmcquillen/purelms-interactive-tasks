@@ -1,6 +1,6 @@
 [project]
 name = "purelms-interactive-tasks"
-version = "0.2.8"
+version = "0.2.9"
 description = "Container + frontend pairs that PureLMS launches as InteractiveTasks"
 readme = "README.md"
 requires-python = ">=3.10"
