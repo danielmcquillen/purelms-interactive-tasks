@@ -641,4 +641,7 @@ def test_service_route_is_private_digest_pinned_and_request_driven() -> None:
     assert "PURELMS_RUNTIME_MODE=service" in recipe
     assert "roles/run.invoker" in recipe
     assert '--member="serviceAccount:${MAIN_SA}"' in recipe
-    assert "roles/run.developer" in recipe
+    assert 'CAPACITY_ROLE_ID="purelmsSimulationCapacityManager"' in recipe
+    assert "run.operations.get,run.services.get,run.services.update" in recipe
+    assert '--role="${CAPACITY_ROLE}"' in recipe
+    assert "roles/run.developer" not in recipe

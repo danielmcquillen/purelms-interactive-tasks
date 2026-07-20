@@ -430,6 +430,8 @@ deploy-service slug stage image_tag="": (_check-slug slug)
     INVOKER_SA_NAME="purelms-sim-invoker-{{ stage }}"
     INVOKER_SA="${INVOKER_SA_NAME}@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
     MAIN_SA="purelms-cloudrun-{{ stage }}@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
+    CAPACITY_ROLE_ID="purelmsSimulationCapacityManager"
+    CAPACITY_ROLE="projects/${GCP_PROJECT_ID}/roles/${CAPACITY_ROLE_ID}"
     WORKER_SERVICE="${PURELMS_WORKER_SERVICE_BASE}${SUFFIX}"
 
     if ! gcloud iam service-accounts describe "${BACKEND_SA}" \
@@ -449,6 +451,26 @@ deploy-service slug stage image_tag="": (_check-slug slug)
         --member="serviceAccount:${MAIN_SA}" \
         --role="roles/iam.serviceAccountUser" \
         --project="${GCP_PROJECT_ID}" --quiet >/dev/null
+
+    # Activation and capacity presets update only bounded Service fields. A
+    # dedicated role avoids granting the LMS delete, shell, or deploy access.
+    CAPACITY_PERMISSIONS="run.operations.get,run.services.get,run.services.update"
+    if gcloud iam roles describe "${CAPACITY_ROLE_ID}" \
+            --project="${GCP_PROJECT_ID}" >/dev/null 2>&1; then
+        gcloud iam roles update "${CAPACITY_ROLE_ID}" \
+            --project="${GCP_PROJECT_ID}" \
+            --title="PureLMS Simulation Capacity Manager" \
+            --description="Verify and update bounded capacity settings on exact PureLMS simulation Services" \
+            --permissions="${CAPACITY_PERMISSIONS}" \
+            --stage=GA --quiet >/dev/null
+    else
+        gcloud iam roles create "${CAPACITY_ROLE_ID}" \
+            --project="${GCP_PROJECT_ID}" \
+            --title="PureLMS Simulation Capacity Manager" \
+            --description="Verify and update bounded capacity settings on exact PureLMS simulation Services" \
+            --permissions="${CAPACITY_PERMISSIONS}" \
+            --stage=GA --quiet >/dev/null
+    fi
 
     EXISTING_IMAGE=$(gcloud run services describe "${SERVICE_NAME}" \
         --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
@@ -487,11 +509,11 @@ deploy-service slug stage image_tag="": (_check-slug slug)
         --member="serviceAccount:${INVOKER_SA}" \
         --role="roles/run.invoker" --quiet >/dev/null
     # PureLMS verifies this exact Service and applies audited capacity changes.
-    # Keep the mutation grant resource-scoped rather than project-wide.
+    # Keep the least-privilege mutation grant resource-scoped.
     retry_gcloud gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
         --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
         --member="serviceAccount:${MAIN_SA}" \
-        --role="roles/run.developer" --quiet >/dev/null
+        --role="${CAPACITY_ROLE}" --quiet >/dev/null
     retry_gcloud gcloud run services add-iam-policy-binding "${WORKER_SERVICE}" \
         --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
         --member="serviceAccount:${BACKEND_SA}" \
