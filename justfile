@@ -486,10 +486,12 @@ deploy-service slug stage image_tag="": (_check-slug slug)
         --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
         --member="serviceAccount:${INVOKER_SA}" \
         --role="roles/run.invoker" --quiet >/dev/null
+    # PureLMS verifies this exact Service and applies audited capacity changes.
+    # Keep the mutation grant resource-scoped rather than project-wide.
     retry_gcloud gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
         --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
         --member="serviceAccount:${MAIN_SA}" \
-        --role="roles/run.viewer" --quiet >/dev/null
+        --role="roles/run.developer" --quiet >/dev/null
     retry_gcloud gcloud run services add-iam-policy-binding "${WORKER_SERVICE}" \
         --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
         --member="serviceAccount:${BACKEND_SA}" \
