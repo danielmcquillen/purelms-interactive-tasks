@@ -642,8 +642,12 @@ def test_service_route_is_private_digest_pinned_and_request_driven() -> None:
     assert "roles/run.invoker" in recipe
     assert '--member="serviceAccount:${MAIN_SA}"' in recipe
     assert 'CAPACITY_ROLE_ID="purelmsSimulationCapacityManager"' in recipe
-    assert "run.operations.get,run.services.get,run.services.update" in recipe
+    assert "run.services.get,run.services.update" in recipe
     assert '--role="${CAPACITY_ROLE}"' in recipe
+    assert 'OPERATION_ROLE_ID="purelmsSimulationOperationViewer"' in recipe
+    assert '--permissions="run.operations.get"' in recipe
+    assert "gcloud projects add-iam-policy-binding" in recipe
+    assert '--role="${OPERATION_ROLE}"' in recipe
     assert "PURELMS_ARTIFACT_REPO" in recipe
     assert "gcloud artifacts repositories add-iam-policy-binding" in recipe
     assert '--role="roles/artifactregistry.reader"' in recipe

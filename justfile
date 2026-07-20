@@ -432,6 +432,8 @@ deploy-service slug stage image_tag="": (_check-slug slug)
     MAIN_SA="purelms-cloudrun-{{ stage }}@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
     CAPACITY_ROLE_ID="purelmsSimulationCapacityManager"
     CAPACITY_ROLE="projects/${GCP_PROJECT_ID}/roles/${CAPACITY_ROLE_ID}"
+    OPERATION_ROLE_ID="purelmsSimulationOperationViewer"
+    OPERATION_ROLE="projects/${GCP_PROJECT_ID}/roles/${OPERATION_ROLE_ID}"
     WORKER_SERVICE="${PURELMS_WORKER_SERVICE_BASE}${SUFFIX}"
 
     if ! gcloud iam service-accounts describe "${BACKEND_SA}" \
@@ -462,7 +464,7 @@ deploy-service slug stage image_tag="": (_check-slug slug)
 
     # Activation and capacity presets update only bounded Service fields. A
     # dedicated role avoids granting the LMS delete, shell, or deploy access.
-    CAPACITY_PERMISSIONS="run.operations.get,run.services.get,run.services.update"
+    CAPACITY_PERMISSIONS="run.services.get,run.services.update"
     if gcloud iam roles describe "${CAPACITY_ROLE_ID}" \
             --project="${GCP_PROJECT_ID}" >/dev/null 2>&1; then
         gcloud iam roles update "${CAPACITY_ROLE_ID}" \
@@ -479,6 +481,29 @@ deploy-service slug stage image_tag="": (_check-slug slug)
             --permissions="${CAPACITY_PERMISSIONS}" \
             --stage=GA --quiet >/dev/null
     fi
+
+    # Cloud Run update operations are separate project resources, so their
+    # read permission cannot inherit from an exact Service binding. Keep that
+    # single read-only permission in its own project-scoped role.
+    if gcloud iam roles describe "${OPERATION_ROLE_ID}" \
+            --project="${GCP_PROJECT_ID}" >/dev/null 2>&1; then
+        gcloud iam roles update "${OPERATION_ROLE_ID}" \
+            --project="${GCP_PROJECT_ID}" \
+            --title="PureLMS Simulation Operation Viewer" \
+            --description="Read completion state for audited PureLMS Cloud Run Service updates" \
+            --permissions="run.operations.get" \
+            --stage=GA --quiet >/dev/null
+    else
+        gcloud iam roles create "${OPERATION_ROLE_ID}" \
+            --project="${GCP_PROJECT_ID}" \
+            --title="PureLMS Simulation Operation Viewer" \
+            --description="Read completion state for audited PureLMS Cloud Run Service updates" \
+            --permissions="run.operations.get" \
+            --stage=GA --quiet >/dev/null
+    fi
+    retry_gcloud gcloud projects add-iam-policy-binding "${GCP_PROJECT_ID}" \
+        --member="serviceAccount:${MAIN_SA}" \
+        --role="${OPERATION_ROLE}" --condition=None --quiet >/dev/null
 
     # Cloud Run revalidates the immutable image whenever a template-level
     # capacity change creates a revision. Give the LMS read-only access to this
