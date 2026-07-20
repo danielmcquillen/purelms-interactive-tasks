@@ -388,8 +388,8 @@ deploy-service slug stage image_tag="": (_check-slug slug)
         echo "✗ Stage must be dev, staging, or prod; got: {{ stage }}"
         exit 1
     fi
-    for var in GCP_PROJECT_ID GCP_REGION PURELMS_IMAGE_BASE \
-        PURELMS_WORKER_SERVICE_BASE; do
+    for var in GCP_PROJECT_ID GCP_REGION PURELMS_ARTIFACT_REPO \
+        PURELMS_IMAGE_BASE PURELMS_WORKER_SERVICE_BASE; do
         if [ -z "${!var:-}" ]; then
             echo "✗ ${var} is not set. Source the PureLMS GCP .just file."
             exit 1
@@ -471,6 +471,15 @@ deploy-service slug stage image_tag="": (_check-slug slug)
             --permissions="${CAPACITY_PERMISSIONS}" \
             --stage=GA --quiet >/dev/null
     fi
+
+    # Cloud Run revalidates the immutable image whenever a template-level
+    # capacity change creates a revision. Give the LMS read-only access to this
+    # Artifact Registry repository; it still cannot publish or delete images.
+    retry_gcloud gcloud artifacts repositories add-iam-policy-binding \
+        "${PURELMS_ARTIFACT_REPO}" \
+        --location="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
+        --member="serviceAccount:${MAIN_SA}" \
+        --role="roles/artifactregistry.reader" --quiet >/dev/null
 
     EXISTING_IMAGE=$(gcloud run services describe "${SERVICE_NAME}" \
         --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
