@@ -11,7 +11,7 @@ parameter-marshalling utility).
   callbacks. `echo`, `energyplus_single_zone`, and `modelica_diagram` depend on it (the
   "second user" trigger below), so each backend's `main.py` is identical
   regardless of whether the LMS launched it via the local DockerCompose
-  path or the async Cloud Run Jobs path. See its README for the contract.
+  path or the managed Job/Service path. See its README for the contract.
 
 ## When to extract
 

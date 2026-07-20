@@ -29,5 +29,5 @@ OUTPUT_METRICS = [
 ]
 
 # Whether the domain implementation is a long-lived streaming service. This
-# does not control local Docker vs asynchronous Cloud Run Jobs transport.
+# does not control local Docker vs managed Job/Service transport.
 SUPPORTS_STREAMING = False

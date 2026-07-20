@@ -24,14 +24,23 @@ import tomllib
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INVENTORY_PATH = REPO_ROOT / "backends.toml"
-CATALOG_SCHEMA_VERSION = 1
+CATALOG_SCHEMA_VERSION = 2
 JOB_NAME_MAX_LENGTH = 49
 JOB_NAME_PREFIX = "purelms-itask-"
+SERVICE_NAME_MAX_LENGTH = 63
 SEMVER_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)*$")
 STAGE_SUFFIX = {"prod": "", "staging": "-stg", "dev": "-dev"}
 VERSION_LINE_RE = re.compile(
     r"^version:\s*[\"']?([0-9]+\.[0-9]+\.[0-9]+)[\"']?\s*(?:#.*)?$",
+    re.MULTILINE,
+)
+TIMEOUT_LINE_RE = re.compile(
+    r"^\s*default_timeout_seconds:\s*([0-9]+)\s*(?:#.*)?$",
+    re.MULTILINE,
+)
+MAX_TIMEOUT_LINE_RE = re.compile(
+    r"^\s*max_timeout_seconds:\s*([0-9]+)\s*(?:#.*)?$",
     re.MULTILINE,
 )
 
@@ -159,6 +168,49 @@ def cloud_run_job_name(*, slug: str, version: str, stage: str) -> str:
     return f"{JOB_NAME_PREFIX}{shortened}-{identity_hash}{version_token}{stage_suffix}"
 
 
+def cloud_run_service_name(*, slug: str, version: str, stage: str) -> str:
+    """Return the immutable Cloud Run Service name for one task release."""
+    suffix = "-svc"
+    candidate = cloud_run_job_name(slug=slug, version=version, stage=stage) + suffix
+    if len(candidate) <= SERVICE_NAME_MAX_LENGTH:
+        return candidate
+    # Job naming is already stable and bounded. The defensive branch keeps the
+    # Service helper valid if that bound changes independently later.
+    identity_hash = hashlib.sha256(
+        f"{slug}@{version}:{stage}:service".encode()
+    ).hexdigest()[:8]
+    stage_suffix = STAGE_SUFFIX[stage]
+    version_token = f"-v{version.replace('.', '-')}"
+    reserved = (
+        len(JOB_NAME_PREFIX)
+        + 1
+        + len(identity_hash)
+        + len(version_token)
+        + len(stage_suffix)
+        + len(suffix)
+    )
+    readable = slug.replace("_", "-")[: SERVICE_NAME_MAX_LENGTH - reserved].rstrip("-")
+    return (
+        f"{JOB_NAME_PREFIX}{readable}-{identity_hash}{version_token}"
+        f"{stage_suffix}{suffix}"
+    )
+
+
+def manifest_runtime_timeout(manifest_yaml: str) -> int:
+    """Return the task's maximum permitted runtime budget."""
+    match = TIMEOUT_LINE_RE.search(manifest_yaml)
+    if match is None or int(match.group(1)) < 1:
+        raise ValueError("manifest must declare a positive default_timeout_seconds")
+    default_timeout = int(match.group(1))
+    maximum_match = MAX_TIMEOUT_LINE_RE.search(manifest_yaml)
+    if maximum_match is None:
+        return default_timeout
+    maximum_timeout = int(maximum_match.group(1))
+    if maximum_timeout < default_timeout:
+        raise ValueError("max_timeout_seconds must be at least the default timeout")
+    return maximum_timeout
+
+
 def tagged_manifest(
     *,
     release_ref: str,
@@ -179,6 +231,12 @@ def build_registration_catalog(
     release_ref: str,
     stage: str,
     image_by_slug: dict[str, str],
+    service_url_by_slug: dict[str, str],
+    project_id: str,
+    region: str,
+    provider_queue: str,
+    invoker_service_account: str,
+    callback_service_account: str,
     selected_slugs: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build the exact manifest/image catalog consumed by Django sync."""
@@ -188,7 +246,8 @@ def build_registration_catalog(
     )
     expected = {backend["slug"] for backend in backends}
     supplied = set(image_by_slug)
-    if supplied != expected:
+    supplied_services = set(service_url_by_slug)
+    if supplied != expected or supplied_services != expected:
         missing = sorted(expected - supplied)
         extra = sorted(supplied - expected)
         details = []
@@ -196,6 +255,12 @@ def build_registration_catalog(
             details.append(f"missing images: {', '.join(missing)}")
         if extra:
             details.append(f"unexpected images: {', '.join(extra)}")
+        missing_services = sorted(expected - supplied_services)
+        extra_services = sorted(supplied_services - expected)
+        if missing_services:
+            details.append(f"missing service URLs: {', '.join(missing_services)}")
+        if extra_services:
+            details.append(f"unexpected service URLs: {', '.join(extra_services)}")
         msg = (
             "catalog image assignments do not match inventory ("
             + "; ".join(
@@ -213,16 +278,72 @@ def build_registration_catalog(
             msg = f"backend {slug!r} has no manifest path"
             raise ValueError(msg)
         manifest_yaml = _git_text(release_ref, manifest_path)
+        version = manifest_version(manifest_yaml)
+        simulation_timeout = manifest_runtime_timeout(manifest_yaml)
+        request_timeout = min(1799, simulation_timeout + 60)
+        dispatch_deadline = min(1800, request_timeout + 60)
         entries.append(
             {
                 "slug": slug,
                 "manifest_yaml": manifest_yaml,
                 "image_uri": image_by_slug[slug],
-                "cloud_run_job_name": cloud_run_job_name(
-                    slug=slug,
-                    version=manifest_version(manifest_yaml),
-                    stage=stage,
-                ),
+                "deployments": [
+                    {
+                        "provider": "cloud_run_job",
+                        "revision": "gcp-job-v1",
+                        "display_name": "Google Cloud Run Job",
+                        "provider_config": {
+                            "project_id": project_id,
+                            "region": region,
+                            "job_name": cloud_run_job_name(
+                                slug=slug,
+                                version=version,
+                                stage=stage,
+                            ),
+                        },
+                        "callback_service_account": callback_service_account,
+                        "capabilities": [
+                            "portable_container_v1",
+                            "callbacks",
+                            "percentage_progress",
+                            "query_status",
+                        ],
+                        "request_timeout_seconds": simulation_timeout,
+                        "dispatch_deadline_seconds": 900,
+                    },
+                    {
+                        "provider": "cloud_run_service",
+                        "revision": "gcp-service-v1",
+                        "display_name": "Google Cloud Run Service",
+                        "provider_config": {
+                            "project_id": project_id,
+                            "region": region,
+                            "service_name": cloud_run_service_name(
+                                slug=slug,
+                                version=version,
+                                stage=stage,
+                            ),
+                            "service_url": service_url_by_slug[slug],
+                            "audience": service_url_by_slug[slug],
+                            "queue_name": provider_queue,
+                            "invoker_service_account": invoker_service_account,
+                        },
+                        "callback_service_account": callback_service_account,
+                        "capabilities": [
+                            "portable_container_v1",
+                            "callbacks",
+                            "percentage_progress",
+                        ],
+                        "capacity_preset": "scale_to_zero",
+                        "minimum_instances": 0,
+                        "maximum_instances": 20,
+                        "container_concurrency": 1,
+                        "request_timeout_seconds": request_timeout,
+                        "dispatch_deadline_seconds": dispatch_deadline,
+                        "startup_cpu_boost": True,
+                        "execution_environment": "gen2",
+                    },
+                ],
             },
         )
 
@@ -264,6 +385,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     catalog_parser.add_argument("--slug", action="append", default=[])
     catalog_parser.add_argument("--image", action="append", default=[])
+    catalog_parser.add_argument("--service-url", action="append", default=[])
+    catalog_parser.add_argument("--project-id", required=True)
+    catalog_parser.add_argument("--region", required=True)
+    catalog_parser.add_argument("--provider-queue", required=True)
+    catalog_parser.add_argument("--invoker-service-account", required=True)
+    catalog_parser.add_argument("--callback-service-account", required=True)
     catalog_parser.add_argument("--base64", action="store_true")
 
     job_parser = subparsers.add_parser(
@@ -274,12 +401,26 @@ def _parser() -> argparse.ArgumentParser:
     job_parser.add_argument("--slug", required=True)
     job_parser.add_argument("--stage", choices=tuple(STAGE_SUFFIX), required=True)
 
+    service_parser = subparsers.add_parser(
+        "service-name",
+        help="Print the exact versioned Cloud Run Service name.",
+    )
+    service_parser.add_argument("--release-ref", required=True)
+    service_parser.add_argument("--slug", required=True)
+    service_parser.add_argument("--stage", choices=tuple(STAGE_SUFFIX), required=True)
+
     version_parser = subparsers.add_parser(
         "task-version",
         help="Print a task's manifest version from one release ref.",
     )
     version_parser.add_argument("--release-ref", required=True)
     version_parser.add_argument("--slug", required=True)
+    timeout_parser = subparsers.add_parser(
+        "task-timeout",
+        help="Print a task's default runtime budget from one release ref.",
+    )
+    timeout_parser.add_argument("--release-ref", required=True)
+    timeout_parser.add_argument("--slug", required=True)
     return parser
 
 
@@ -305,6 +446,12 @@ def main(argv: list[str] | None = None) -> int:
                 release_ref=args.release_ref,
                 stage=args.stage,
                 image_by_slug=parse_image_assignments(args.image),
+                service_url_by_slug=parse_image_assignments(args.service_url),
+                project_id=args.project_id,
+                region=args.region,
+                provider_queue=args.provider_queue,
+                invoker_service_account=args.invoker_service_account,
+                callback_service_account=args.callback_service_account,
                 selected_slugs=args.slug,
             )
             raw = json.dumps(catalog, separators=(",", ":")).encode("utf-8")
@@ -327,6 +474,16 @@ def main(argv: list[str] | None = None) -> int:
                         stage=args.stage,
                     ),
                 )
+            elif args.command == "service-name":
+                sys.stdout.write(
+                    cloud_run_service_name(
+                        slug=args.slug,
+                        version=version,
+                        stage=args.stage,
+                    ),
+                )
+            elif args.command == "task-timeout":
+                sys.stdout.write(str(manifest_runtime_timeout(manifest_yaml)))
             else:
                 sys.stdout.write(version)
             sys.stdout.write("\n")

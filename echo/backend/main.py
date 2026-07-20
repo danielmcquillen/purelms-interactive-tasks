@@ -6,7 +6,7 @@ Reads the input envelope, echoes its parameters back as outputs, writes a
 URI) and the completion signalling (worker ``/complete`` callback on the
 async path) are handled by the shared :mod:`purelms_itask_runtime` so
 this backend meets the runtime contract on BOTH the local DockerCompose
-path and the Cloud Run Jobs path without any mode branching here.
+path and managed provider paths without any mode branching here.
 
 This is the permanent LMS-side integration-test fixture. Real backends
 (EnergyPlus, FMU, etc.) follow the same pattern but actually do domain

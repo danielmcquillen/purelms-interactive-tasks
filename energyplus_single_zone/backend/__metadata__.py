@@ -17,7 +17,7 @@ BACKEND_DESCRIPTION = (
     "(PURELMS_EPLUS_MODE=analytical), so contributors can iterate without the "
     "~500 MB EnergyPlus dependency."
 )
-BACKEND_VERSION = "0.3.3"
+BACKEND_VERSION = "0.3.4"
 
 # Mirror the manifest's ``parameters:`` block (informational).
 EXPOSED_PARAMETERS = [
@@ -54,5 +54,5 @@ OUTPUT_METRICS = [
 ]
 
 # The domain implementation is not a long-lived streaming service. It does
-# report phase progress through the shared runtime on Cloud Run Jobs.
+# report phase progress through the shared runtime on managed deployments.
 SUPPORTS_STREAMING = False

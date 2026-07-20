@@ -6,7 +6,7 @@ to the pure-function domain code in ``runner.simulate``. The I/O itself
 (local-dir vs GCS URI) and the worker callbacks (progress mid-run +
 the authoritative ``/complete`` at the end) are delegated to the shared
 :mod:`purelms_itask_runtime`, so this file meets the runtime contract on
-BOTH the local DockerCompose path and the async Cloud Run Jobs path
+BOTH the local DockerCompose path and managed provider paths
 without any mode branching here.
 
 ``runner.simulate`` is the swap-in seam: real EnergyPlus vs the

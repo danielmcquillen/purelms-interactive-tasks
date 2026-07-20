@@ -15,7 +15,7 @@ schema_version: "purelms.interactive_task.v1"
 
 slug: echo
 name: Echo
-version: 0.1.7
+version: 0.1.8
 description: |
   Permanent LMS-side integration-test fixture. Reads whatever
   parameters the learner submits and echoes them back as outputs.
@@ -36,10 +36,15 @@ backend:
   progress_reporting: none
   default_timeout_seconds: 30
 
+deployment:
+  portable_contract: purelms.portable_container.v1
+  required_capabilities:
+    - callbacks
+
 frontend:
   # Built via `just frontend-build echo` to echo/frontend/dist/echo.js.
   # PureLMS's install_interactive_task command stages this into the
-  # versioned static path at backends/echo/0.1.7/echo.js.
+  # versioned static path at backends/echo/0.1.8/echo.js.
   bundle: echo.js
   mount_contract: purelms.interactive_mount.v1
 

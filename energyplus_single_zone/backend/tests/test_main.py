@@ -33,7 +33,7 @@ def _envelope(parameters: dict, *, run_id=None) -> SimulationInputEnvelope:
     """Build a minimal SimulationInputEnvelope for the sync path.
 
     The context fields are placeholders because this unit test uses the local
-    directory path. Cloud Run Jobs uses them for progress and completion
+    directory path. Managed deployment uses them for progress and completion
     callbacks through the shared runtime.
     """
     return SimulationInputEnvelope(

@@ -8,7 +8,7 @@ SAME contract in both:
   ``PURELMS_INPUT_DIR`` (read-only) + ``PURELMS_OUTPUT_DIR`` (writable),
   blocks on the container, then reads ``output.json`` off disk. The
   callback URLs in the envelope are the ``file:///dev/null`` sentinel.
-- **Async / object storage** (``CloudRunJobsExecutionBackend``): canonical
+- **Async / object storage** (Cloud Run Job or Service): canonical
   ``gs://`` URIs identify the immutable envelopes, while short-lived signed
   URLs grant this run one input read, output create, and verification read.
 
@@ -44,19 +44,21 @@ import time
 import urllib.error
 import urllib.request
 from bisect import bisect_right
+from collections.abc import Mapping
 from dataclasses import dataclass
+from http import HTTPStatus
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from purelms_shared.callbacks import CompleteCallback
 from purelms_shared.callbacks import ProgressCallback
 from purelms_shared.envelopes import SimulationInputEnvelope
+from purelms_shared.envelopes import SimulationOutputEnvelope
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from purelms_shared.envelopes import ExecutionContext
-    from purelms_shared.envelopes import SimulationOutputEnvelope
 
 _GS_PREFIX = "gs://"
 _HTTP_PREFIXES = ("http://", "https://")
@@ -115,6 +117,10 @@ class RuntimeConfigError(RuntimeError):
     """
 
 
+class ObjectNotFoundError(RuntimeConfigError):
+    """A signed immutable object capability resolved to HTTP 404."""
+
+
 def _validate_uri_mode(
     input_uri: str | None,
     output_uri: str | None,
@@ -171,7 +177,7 @@ class RuntimeLocation:
     """Where this run reads input + writes output, per the env contract.
 
     Built from the environment by :meth:`from_env`. ``input_uri`` /
-    ``output_uri`` are the ``gs://`` URIs set by the Cloud Run Jobs path;
+    ``output_uri`` are the ``gs://`` URIs set by managed cloud execution;
     ``input_dir`` / ``output_dir`` are the mount points the local
     DockerCompose path uses. Exactly one mode is active per run.
     """
@@ -199,19 +205,24 @@ class RuntimeLocation:
         — then post that local path to ``/complete``, which the worker
         tries (and fails) to download as a ``gs://`` envelope.
         """
-        input_uri = os.environ.get("PURELMS_INPUT_URI") or None
-        output_uri = os.environ.get("PURELMS_OUTPUT_URI") or None
-        input_fetch_url = os.environ.get("PURELMS_INPUT_FETCH_URL") or None
-        output_upload_url = os.environ.get("PURELMS_OUTPUT_UPLOAD_URL") or None
-        output_verify_url = os.environ.get("PURELMS_OUTPUT_VERIFY_URL") or None
+        return cls.from_mapping(os.environ)
+
+    @classmethod
+    def from_mapping(cls, environment: Mapping[str, str]) -> RuntimeLocation:
+        """Build a location from an isolated per-request environment mapping."""
+        input_uri = environment.get("PURELMS_INPUT_URI") or None
+        output_uri = environment.get("PURELMS_OUTPUT_URI") or None
+        input_fetch_url = environment.get("PURELMS_INPUT_FETCH_URL") or None
+        output_upload_url = environment.get("PURELMS_OUTPUT_UPLOAD_URL") or None
+        output_verify_url = environment.get("PURELMS_OUTPUT_VERIFY_URL") or None
         _validate_uri_mode(
             input_uri,
             output_uri,
             (input_fetch_url, output_upload_url, output_verify_url),
         )
-        input_sha256 = os.environ.get("PURELMS_INPUT_SHA256") or None
-        input_size_raw = os.environ.get("PURELMS_INPUT_SIZE_BYTES") or None
-        input_generation_raw = os.environ.get("PURELMS_INPUT_GENERATION") or None
+        input_sha256 = environment.get("PURELMS_INPUT_SHA256") or None
+        input_size_raw = environment.get("PURELMS_INPUT_SIZE_BYTES") or None
+        input_generation_raw = environment.get("PURELMS_INPUT_GENERATION") or None
         input_size = int(input_size_raw) if input_size_raw is not None else None
         input_generation = (
             int(input_generation_raw) if input_generation_raw is not None else None
@@ -242,11 +253,11 @@ class RuntimeLocation:
             raise RuntimeConfigError(msg)
 
         return cls(
-            run_id=os.environ.get("PURELMS_RUN_ID", "unknown"),
+            run_id=environment.get("PURELMS_RUN_ID", "unknown"),
             input_uri=input_uri,
             output_uri=output_uri,
-            input_dir=Path(os.environ.get("PURELMS_INPUT_DIR", "/purelms/input")),
-            output_dir=Path(os.environ.get("PURELMS_OUTPUT_DIR", "/purelms/output")),
+            input_dir=Path(environment.get("PURELMS_INPUT_DIR", "/purelms/input")),
+            output_dir=Path(environment.get("PURELMS_OUTPUT_DIR", "/purelms/output")),
             input_sha256=input_sha256,
             input_size_bytes=input_size,
             input_generation=input_generation,
@@ -372,6 +383,45 @@ def write_output_envelope(
     )
 
 
+def read_existing_output(
+    location: RuntimeLocation,
+) -> tuple[SimulationOutputEnvelope, ObjectIdentity] | None:
+    """Read an already-created cloud output, returning ``None`` only on 404."""
+    if not location.uses_gcs_output or not location.output_verify_url:
+        raise RuntimeConfigError("Replay inspection requires cloud output mode.")
+    try:
+        payload, generation = _http_get_bytes(
+            location.output_verify_url,
+            max_bytes=_max_envelope_bytes(),
+        )
+    except ObjectNotFoundError:
+        return None
+    if generation is None:
+        raise RuntimeConfigError("object storage returned no output generation")
+    envelope = SimulationOutputEnvelope.model_validate_json(payload)
+    return envelope, ObjectIdentity(
+        sha256=hashlib.sha256(payload).hexdigest(),
+        size_bytes=len(payload),
+        generation=generation,
+    )
+
+
+def notify_existing_output(
+    location: RuntimeLocation,
+    context: ExecutionContext,
+    identity: ObjectIdentity,
+) -> None:
+    """Retry completion for immutable output produced by an earlier delivery."""
+    if not location.output_uri:
+        raise RuntimeConfigError("Cloud output URI is required for completion replay.")
+    _post_complete(
+        context,
+        output_envelope_uri=location.output_uri,
+        exit_code=0,
+        identity=identity,
+    )
+
+
 class ProgressReporter:
     """Quantize and time-throttle one backend's progress callbacks.
 
@@ -492,7 +542,7 @@ def _post_complete(
     to FAILED_RUNTIME + refunded despite a perfectly good ``output.json``
     sitting in GCS. So we retry with exponential backoff and, if it still
     can't be delivered, RAISE — the container exits non-zero, which (a)
-    surfaces the failure in the Cloud Run Job execution and (b) lets the
+    surfaces the failure in provider diagnostics and (b) lets the
     worker's sweeper salvage the run from the already-written envelope
     rather than refunding it.
     """
@@ -588,6 +638,8 @@ def _http_get_bytes(url: str, *, max_bytes: int) -> tuple[bytes, int | None]:
             content = response.read(max_bytes + 1)
             generation_raw = response.headers.get("x-goog-generation")
     except urllib.error.HTTPError as exc:
+        if exc.code == HTTPStatus.NOT_FOUND:
+            raise ObjectNotFoundError("signed object does not exist") from None
         msg = f"signed object read failed with HTTP {exc.code}"
         raise RuntimeConfigError(msg) from None
     except urllib.error.URLError:

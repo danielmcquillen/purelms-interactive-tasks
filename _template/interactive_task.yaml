@@ -28,6 +28,14 @@ backend:
   progress_reporting: none
   default_timeout_seconds: 60
 
+# Optional restrictions. Absence means the portable v1 container contract.
+deployment:
+  portable_contract: purelms.portable_container.v1
+  required_capabilities:
+    - callbacks
+  # provider_allowlist is normally omitted. Add it only when the task truly
+  # depends on a provider-specific facility.
+
 # REQUIRED: frontend deploy metadata
 frontend:
   bundle: TODO_your_slug_here.js   # filename inside frontend/dist/

@@ -1,4 +1,4 @@
-"""Contract tests for backend publishing and Cloud Run Job deployment."""
+"""Contract tests for task publishing and managed execution deployments."""
 
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.backend_inventory import build_registration_catalog  # noqa: E402
 from scripts.backend_inventory import cloud_run_job_name  # noqa: E402
+from scripts.backend_inventory import cloud_run_service_name  # noqa: E402
+from scripts.backend_inventory import manifest_runtime_timeout  # noqa: E402
 from scripts.backend_inventory import manifest_version  # noqa: E402
 from scripts.validate_release_assets import manifest_asset_entries  # noqa: E402
 from scripts.validate_release_assets import validate_release_assets  # noqa: E402
@@ -115,9 +117,22 @@ def test_registration_catalog_uses_tagged_inventory_and_manifests() -> None:
         release_ref="HEAD",
         stage="prod",
         image_by_slug=images,
+        service_url_by_slug={
+            backend["slug"]: f"https://{backend['slug'].replace('_', '-')}.run.app"
+            for backend in released
+        },
+        project_id="sample-project",
+        region="us-central1",
+        provider_queue="purelms-sim-execution",
+        invoker_service_account=(
+            "purelms-sim-invoker-prod@sample-project.iam.gserviceaccount.com"
+        ),
+        callback_service_account=(
+            "purelms-sim-prod@sample-project.iam.gserviceaccount.com"
+        ),
     )
 
-    assert catalog["schema_version"] == 1
+    assert catalog["schema_version"] == 2
     assert [entry["slug"] for entry in catalog["backends"]] == [
         backend["slug"] for backend in released
     ]
@@ -131,11 +146,18 @@ def test_registration_catalog_uses_tagged_inventory_and_manifests() -> None:
             text=True,
         ).stdout
         assert entry["manifest_yaml"] == tagged_manifest
-        assert entry["cloud_run_job_name"] == cloud_run_job_name(
+        job, service = entry["deployments"]
+        assert job["provider_config"]["job_name"] == cloud_run_job_name(
             slug=backend["slug"],
             version=manifest_version(tagged_manifest),
             stage="prod",
         )
+        assert service["provider_config"]["service_name"] == cloud_run_service_name(
+            slug=backend["slug"],
+            version=manifest_version(tagged_manifest),
+            stage="prod",
+        )
+        assert service["provider_config"]["queue_name"] == "purelms-sim-execution"
 
 
 def test_cloud_run_job_names_pin_task_version_and_compact_stage() -> None:
@@ -152,6 +174,17 @@ def test_cloud_run_job_names_pin_task_version_and_compact_stage() -> None:
         )
         == "purelms-itask-energyplus-single-zone-v0-2-3-stg"
     )
+
+
+def test_provider_deadlines_use_manifest_maximum_runtime() -> None:
+    """Placement override headroom must fit inside provider request limits."""
+    manifest = """
+backend:
+  default_timeout_seconds: 30
+  max_timeout_seconds: 120
+"""
+
+    assert manifest_runtime_timeout(manifest) == 120
 
 
 def test_long_cloud_run_job_names_are_bounded_and_collision_safe() -> None:
@@ -309,6 +342,23 @@ def test_cloud_runtime_locks_google_auth_requests_transport() -> None:
             encoding="utf-8",
         )
         assert "from google.auth.transport.requests import Request" in dockerfile
+
+
+def test_backend_entrypoints_reference_the_copied_script_location() -> None:
+    """Every Service image must point at the backend script it actually copies."""
+    expected = {
+        "echo": "/app/main.py",
+        "energyplus_single_zone": "/home/purelms/main.py",
+        "modelica_diagram": "/app/main.py",
+    }
+    for slug, script_path in expected.items():
+        dockerfile = (REPO_ROOT / slug / "backend/Dockerfile").read_text(
+            encoding="utf-8",
+        )
+        expected_entrypoint = (
+            f'["python", "-m", "purelms_itask_runtime.entrypoint", "{script_path}"]'
+        )
+        assert expected_entrypoint in dockerfile
 
 
 def test_release_jobs_checkout_the_requested_signed_tag() -> None:
@@ -511,7 +561,7 @@ def test_release_workflow_validates_assets_and_versions_before_release() -> None
 
 def test_deploy_resolves_tag_and_pins_job_to_digest() -> None:
     """A release tag is only a selector; the deployed Job uses its digest."""
-    recipe = _recipe("deploy", "deploy-all")
+    recipe = _recipe("deploy-job", "deploy-service")
 
     assert "gcloud artifacts docker images describe" in recipe
     assert "image_summary.digest" in recipe
@@ -522,7 +572,7 @@ def test_deploy_resolves_tag_and_pins_job_to_digest() -> None:
 
 def test_deploy_preserves_stage_and_identity_boundaries() -> None:
     """Stages get distinct Jobs and containers run outside the Django identity."""
-    recipe = _recipe("deploy", "deploy-all")
+    recipe = _recipe("deploy-job", "deploy-service")
     suffix_assignment = 'SUFFIX=$(if [ "{{ stage }}" = "prod" ]'
 
     assert "scripts/backend_inventory.py job-name" in recipe
@@ -556,7 +606,7 @@ def test_deploy_preserves_stage_and_identity_boundaries() -> None:
 
 def test_deploy_refuses_to_repoint_an_existing_versioned_job() -> None:
     """A task-version Job cannot be silently changed to different image bytes."""
-    recipe = _recipe("deploy", "deploy-all")
+    recipe = _recipe("deploy-job", "deploy-service")
 
     assert 'if [ "${EXISTING_IMAGE}" != "${PINNED_IMAGE}" ]; then' in recipe
     assert "Refusing to rewrite immutable Job" in recipe
@@ -566,7 +616,7 @@ def test_deploy_refuses_to_repoint_an_existing_versioned_job() -> None:
 
 def test_deploy_retries_new_service_account_propagation() -> None:
     """First deployment tolerates IAM's documented eventual consistency."""
-    recipe = _recipe("deploy", "deploy-all")
+    recipe = _recipe("deploy-job", "deploy-service")
 
     assert "retry_gcloud()" in recipe
     assert "max_attempts=7" in recipe
@@ -574,3 +624,19 @@ def test_deploy_retries_new_service_account_propagation() -> None:
     assert 'if [ "${delay}" -gt 30 ]; then delay=30; fi' in recipe
     assert "retry_gcloud gcloud run jobs deploy" in recipe
     assert "retry_gcloud gcloud run services add-iam-policy-binding" in recipe
+
+
+def test_service_route_is_private_digest_pinned_and_request_driven() -> None:
+    """The low-latency route retains immutable image and identity boundaries."""
+    recipe = _recipe("deploy-service", "deploy")
+
+    assert "scripts/backend_inventory.py service-name" in recipe
+    assert 'PINNED_IMAGE="${IMAGE}@${DIGEST}"' in recipe
+    assert "Refusing to repoint immutable Service" in recipe
+    assert "--no-allow-unauthenticated" in recipe
+    assert "--ingress=internal" in recipe
+    assert "--concurrency=1" in recipe
+    assert "--min-instances=0" in recipe
+    assert "--cpu-boost" in recipe
+    assert "PURELMS_RUNTIME_MODE=service" in recipe
+    assert "roles/run.invoker" in recipe

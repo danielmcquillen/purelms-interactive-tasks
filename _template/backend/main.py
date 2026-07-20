@@ -6,7 +6,7 @@ domain work, and writes a SimulationOutputEnvelope. The shared
 ``purelms_itask_runtime`` handles the I/O (local dir vs GCS URI) and the
 worker callbacks (progress mid-run + the required ``/complete`` notification at
 the end), so the SAME container satisfies the contract on BOTH the local
-DockerCompose path and the async Cloud Run Jobs path — with no
+DockerCompose path and managed provider paths — with no
 "am I local or cloud?" branching here.
 
 This file is the skeleton. Replace the "TODO: domain work" section with

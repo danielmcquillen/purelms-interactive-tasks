@@ -53,4 +53,4 @@ COPY --chown=purelms:purelms main.py ./
 ENV PURELMS_INPUT_DIR=/purelms/input
 ENV PURELMS_OUTPUT_DIR=/purelms/output
 
-ENTRYPOINT ["python", "main.py"]
+ENTRYPOINT ["python", "-m", "purelms_itask_runtime.entrypoint", "/app/main.py"]

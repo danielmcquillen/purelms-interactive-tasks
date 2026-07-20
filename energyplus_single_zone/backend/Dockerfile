@@ -16,7 +16,7 @@
 
 # Build and release recipes target linux/amd64. EnergyPlus ships an x86_64
 # Linux binary only (no arm64 Linux build), so the bundled binary dictates the
-# image architecture. amd64 also matches Cloud Run Jobs. On an Apple-Silicon
+# image architecture. amd64 also matches managed Cloud Run. On an Apple-Silicon
 # host Docker Desktop builds and runs it under emulation (a single-zone annual
 # run is still only seconds). The explicit uname guards below make a direct
 # native-arm64 `docker build` fail instead of creating a broken mixed-arch image.
@@ -67,7 +67,7 @@ ARG PURELMS_IMAGE_VERSION="dev"
 ARG PURELMS_IMAGE_REVISION="unknown"
 ARG PURELMS_IMAGE_SOURCE="https://github.com/danielmcquillen/purelms-interactive-tasks"
 ARG PURELMS_BACKEND_SLUG="energyplus_single_zone"
-ARG PURELMS_TASK_VERSION="0.3.3"
+ARG PURELMS_TASK_VERSION="0.3.4"
 ARG PURELMS_SHARED_VERSION="0.5.0"
 
 LABEL org.opencontainers.image.title="PureLMS EnergyPlus Single-Zone InteractiveTask backend" \
@@ -125,4 +125,4 @@ ENV PURELMS_OUTPUT_DIR=/purelms/output
 ENV PURELMS_EPLUS_MODE=energyplus
 ENV PURELMS_EPLUS_WEATHER_DIR=/opt/weather
 
-ENTRYPOINT ["python", "main.py"]
+ENTRYPOINT ["python", "-m", "purelms_itask_runtime.entrypoint", "/home/purelms/main.py"]

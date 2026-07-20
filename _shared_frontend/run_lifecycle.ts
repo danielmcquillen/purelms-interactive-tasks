@@ -63,6 +63,7 @@ export function activeRunStatusText(
   if (isTerminalRun(status)) return "Loading the completed result…";
   if (status === "pending") return "Preparing your simulation…";
   if (status === "dispatched") {
+    if (progressStep) return progressStep;
     return "Starting the simulation environment… The first run can take a minute.";
   }
   const progress = typeof progressPct === "number" && progressPct > 0

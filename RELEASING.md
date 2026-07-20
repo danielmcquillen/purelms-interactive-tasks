@@ -32,7 +32,7 @@ For each backend slug (`echo`, `energyplus_single_zone`,
 5. **Version-honest task identities.** CI compares release inputs with the
    preceding tag. This is an aggregate release: every image receives the new
    repository release label, so every released task's manifest version must
-   increase. This keeps each versioned Cloud Run Job bound to one digest.
+   increase. This keeps each versioned provider route bound to one digest.
 6. **Operator-readable OCI identity.** Every image records its repository
    release version, source revision, source repository, backend slug, and
    manifest task version. The inventory's shared-contract floor is installed
@@ -99,7 +99,7 @@ it by resolving a digest while logged out of GHCR.
 ### 3. PureLMS GAR mirror (optional)
 
 Only if you want the images in PureLMS's private Artifact Registry for
-Cloud Run Jobs. The keyless setup recipe creates a repository-scoped Workload
+Cloud Run Jobs and Services. The keyless setup recipe creates a repository-scoped Workload
 Identity provider, a least-privilege publisher service account, and all five
 GitHub Actions variables—no service-account key or GitHub secret is created:
 

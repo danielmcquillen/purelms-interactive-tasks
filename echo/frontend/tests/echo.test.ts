@@ -10,11 +10,21 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, mountContract } from "../src/echo.js";
-import { restoreLastRun, resumeRun } from "../../../_shared_frontend/run_lifecycle.js";
+import {
+  activeRunStatusText,
+  restoreLastRun,
+  resumeRun,
+} from "../../../_shared_frontend/run_lifecycle.js";
 
 interface CapturedSubmit {
   parameters: Record<string, unknown>;
 }
+
+it("surfaces provider-capacity waiting copy when the worker supplies it", () => {
+  expect(
+    activeRunStatusText("dispatched", null, "Waiting for simulation capacity…"),
+  ).toBe("Waiting for simulation capacity…");
+});
 
 function makeHelpers(opts: {
   submitOutcome: unknown;

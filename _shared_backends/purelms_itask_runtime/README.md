@@ -5,12 +5,12 @@ Shared runtime helper for PureLMS InteractiveTask **backend containers**.
 A backend container is launched two ways and must satisfy the same
 contract in both:
 
-| | Local / sync (`DockerComposeExecutionBackend`) | Async / signed object (`CloudRunJobsExecutionBackend`) |
+| | Local / sync (`DockerComposeExecutionBackend`) | Managed / signed object (Job or Service) |
 |---|---|---|
 | Input | `PURELMS_INPUT_DIR/input.json` (mounted) | GET `PURELMS_INPUT_FETCH_URL` |
 | Output | `PURELMS_OUTPUT_DIR/output.json` (mounted) | PUT `PURELMS_OUTPUT_UPLOAD_URL`, then GET `PURELMS_OUTPUT_VERIFY_URL` |
 | Progress | none (worker can't observe mid-run) | POST `ProgressCallback` |
-| Completion | worker reads `output.json` off disk | POST `CompleteCallback` (authoritative) |
+| Completion | worker reads `output.json` off disk | immutable `output.json` is authoritative; POST `CompleteCallback` is retryable notification |
 
 This package hides that split so a backend's `main.py` is identical
 regardless of deployment:
@@ -45,6 +45,14 @@ renders an animated indeterminate bar.
 The mode is read from the environment's *shape* (which env vars are set;
 whether the callback URL is `http(s)` vs the `file:///dev/null`
 sentinel) — a backend never branches on "am I local or cloud".
+
+The container entrypoint has two lifecycle modes. The default runs the backend
+script once for a Job. `PURELMS_RUNTIME_MODE=service` starts the shared bounded
+HTTP server. The Service handler validates a narrow request body, refuses work
+at/after its absolute deadline, runs the same script in a subprocess with a
+request-private environment, and checks immutable output before acknowledging.
+On redelivery it skips computation when output already exists and retries only
+completion notification.
 
 On Cloud Run, the worker also supplies `PURELMS_INPUT_SHA256`,
 `PURELMS_INPUT_SIZE_BYTES`, and `PURELMS_INPUT_GENERATION`. The runtime reads

@@ -42,7 +42,7 @@ uv run python manage.py install_interactive_task \
     ../purelms-interactive-tasks/energyplus_single_zone
 
 # After smoke and pilot checks, make it the default for newly authored blocks:
-uv run python manage.py activate_interactive_task energyplus_single_zone 0.3.3 \
+uv run python manage.py activate_interactive_task energyplus_single_zone 0.3.4 \
     --actor-email operator@example.org --reason "Release verification passed"
 ```
 

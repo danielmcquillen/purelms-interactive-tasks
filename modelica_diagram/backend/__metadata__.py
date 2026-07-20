@@ -12,7 +12,7 @@ BACKEND_DESCRIPTION = (
     "expected graph, then runs a pre-compiled Modelica Buildings Library FMU "
     "to report how the system responds."
 )
-BACKEND_VERSION = "0.2.10"
+BACKEND_VERSION = "0.2.11"
 
 # Parameter knobs the authoring UI can expose (mirrors interactive_task.yaml).
 EXPOSED_PARAMETERS = [
@@ -35,5 +35,5 @@ OUTPUT_METRICS = [
 ]
 
 # The domain implementation is not a long-lived streaming service. This does
-# not control local Docker vs asynchronous Cloud Run Jobs transport.
+# not control local Docker vs managed Job/Service transport.
 SUPPORTS_STREAMING = False

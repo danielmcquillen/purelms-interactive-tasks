@@ -107,7 +107,7 @@ That's it. No databases the container writes to. No shared state.
 `purelms_itask_runtime` helper (in `_shared_backends/`) abstracts the
 local-dir-vs-GCS-URI split and the progress/`complete` worker callbacks,
 so the same container satisfies the contract on both the local
-DockerCompose path and the async Cloud Run Jobs path with no
+DockerCompose path and managed Cloud Run Job/Service paths with no
 mode-branching. Copy `_template/backend/main.py` — it wires
 `RuntimeLocation` / `read_input_envelope` / `make_progress_reporter` /
 `write_output_envelope`. The hand-rolled `input.json` / `output.json`
@@ -157,6 +157,7 @@ backend:
   execution_mode: sync                 # v1 accepts only "sync"
   progress_reporting: none             # none | percentage
   default_timeout_seconds: 600
+  # max_timeout_seconds: 900            (optional authoring headroom)
   # default_memory_limit: "2Gi"        (optional override; default 2Gi)
   # default_cpu_limit: "1.0"           (optional override; default 1.0)
 ```
@@ -166,11 +167,28 @@ backend:
 | `image` | Container image URI. **Optional.** If absent, the installer derives `<registry>/purelms-itask-<slug-with-hyphens>:<version>` using the `--registry` flag's value. Set this explicitly only when your registry has an unusual layout. | Free-form string |
 | `credit_cost` | Compute credits debited per accepted run. Refunded on `FAILED_RUNTIME`, `TIMED_OUT`, or `CANCELLED`; kept on `FAILED_SIMULATION`. Zero means free runs. | Non-negative integer |
 | `trust_tier` | Friendly form. Mapped at install time to `SimulationTrustTier`: `platform` → tier 1, `verified` → tier 2, `community` → tier 3. Only tier 1 is currently launchable. | One of the three values |
-| `execution_mode` | v1 accepts ONLY `"sync"`; `"async"` returns an install error. This field is a future per-task routing declaration—not the transport used by a deployment. The shipped Cloud Run Jobs path already runs these containers asynchronously through GCS and callbacks. | `"sync"` |
+| `execution_mode` | v1 accepts ONLY `"sync"`; `"async"` returns an install error. This is a domain-execution declaration, not the provider transport: managed Job and Service routes are asynchronous to the learner through GCS and callbacks. | `"sync"` |
 | `progress_reporting` | Whether the wrapped tool exposes a genuine measure of completed work. `none` gives the learner an animated indeterminate bar; `percentage` permits a determinate bar after the first callback. The backend, not the browser, owns throttling. | `none` (default) or `percentage` |
 | `default_timeout_seconds` | Wall-clock budget per run. Container is hard-killed after this. | Positive integer |
+| `max_timeout_seconds` | Optional hard ceiling for a placement override. Provider Service request/deadline configuration is derived from this maximum, not only the default. | Integer ≥ default |
 | `default_memory_limit` | Container memory cap (Cloud Run / k8s syntax: `"2Gi"`, `"512Mi"`). | String |
 | `default_cpu_limit` | Container vCPU cap (e.g. `"1.0"`, `"0.5"`). | String |
+
+### The `deployment:` section
+
+```yaml
+deployment:
+  portable_contract: purelms.portable_container.v1
+  required_capabilities:
+    - callbacks
+  # provider_allowlist: [cloud_run_service, cloud_run_job]
+```
+
+All managed tasks use the portable container contract. Declare only capabilities
+the task genuinely needs; `callbacks` and `percentage_progress` are examples.
+Normally omit `provider_allowlist` so the operator can use any verified provider
+that satisfies the contract. Add it only for an actual provider constraint.
+Catalog admission rejects a route that cannot satisfy these declarations.
 
 ### The `frontend:` section
 
@@ -418,7 +436,7 @@ The container is launched with these envs set (the helper reads them via
 |---|---|---|
 | `PURELMS_INPUT_DIR` | `/purelms/input` | **Local/sync** read-only mount with `input.json` + any `InputFile` / `ResourceFile` materializations |
 | `PURELMS_OUTPUT_DIR` | `/purelms/output` | **Local/sync** read-write mount; the helper writes `output.json` + artifacts here |
-| `PURELMS_INPUT_URI` / `PURELMS_OUTPUT_URI` | (unset) | **Async/GCS** `gs://` URIs the worker sets on the Cloud Run Jobs path; the helper reads/writes these instead of the dirs (both set together or neither) |
+| `PURELMS_INPUT_URI` / `PURELMS_OUTPUT_URI` | (unset) | **Managed/GCS** canonical `gs://` identities used by either Job or Service; signed operation URLs carry the bytes (both set together or neither) |
 | `PURELMS_INPUT_SHA256` / `PURELMS_INPUT_SIZE_BYTES` | (unset) | Expected immutable input-envelope identity. They must be set together; the runtime rejects a digest or size mismatch before domain code runs. |
 | `PURELMS_INPUT_GENERATION` | (unset) | GCS object generation for a strict async input read. Required when input identity is supplied on the GCS path, preventing replacement races. |
 | `PURELMS_RUN_ID` | (uuid) | The run's UUID, for log correlation. Not load-bearing — the canonical `run_id` lives inside the envelope. |
@@ -963,7 +981,7 @@ hard-deletes registration row(s). **Blocked** when:
 (The flag is `--task-version` rather than `--version` because Django's `BaseCommand` reserves `--version` for printing the Django version.)
 
 Do not use it to remove a production backend release. Production history must
-follow the retirement workflow below so its pinned course, run, audit, Job,
+follow the retirement workflow below so its pinned course, run, audit, deployments,
 image, and bundle evidence remains intelligible.
 
 ### Retire and purge a production backend version
@@ -979,7 +997,7 @@ uv run python manage.py plan_interactive_task_retirement my_task 0.1.0 \
   --format json
 
 # Only after the plan is eligible, the static bundle is removed and deployed,
-# and the exact provider Job/image digest has been decommissioned:
+# and every exact provider deployment/image digest has been decommissioned:
 uv run python manage.py purge_retired_interactive_task my_task 0.1.0 \
   --actor-email operator@example.org --reason "Retention elapsed" \
   --confirmation-token <token-from-plan> \
@@ -988,7 +1006,7 @@ uv run python manage.py purge_retired_interactive_task my_task 0.1.0 \
 
 Retirement blocks new launches and records an audit event; it does not delete
 anything. The plan refuses active, referenced, or still-retained versions and
-prints the exact static path, Cloud Run Job, and image digest. Provider cleanup
+prints the exact static path, execution deployments, and image digest. Provider cleanup
 and static-bundle deployment are separate, deliberate operations; the final
 purge deletes only the now-unreferenced registration and leaves the audit event
 as evidence. Run workspaces have their own retention policy and are never
@@ -1125,10 +1143,10 @@ The manifest accepts only `execution_mode: sync` at install. This describes the 
 
 Two things are easy to conflate:
 
-- On Cloud Run Jobs, the LMS stages input, grants signed input/output object capabilities, launches the container, and waits for `/complete`.
+- On managed Cloud Run, the LMS stages input and grants signed object capabilities. A Job is launched through the Jobs API; a Service is invoked by one deterministic provider Cloud Task. Both finish through the same immutable output and callback contract.
 - `purelms_itask_runtime` handles signed object I/O, output verification, and OIDC progress/completion callbacks. Task code does not write callback or GCS-client logic.
 
-For now, declare `sync` and design every execution to fit inside `default_timeout_seconds`. The deployment chooses local Docker or asynchronous Cloud Run Jobs independently of this manifest field.
+For now, declare `sync` and design every execution to fit inside the declared timeout. The deployment chooses local Docker or an asynchronous managed Job/Service independently of this manifest field.
 
 ---
 

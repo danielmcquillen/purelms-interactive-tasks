@@ -17,7 +17,8 @@
 # (authenticated callbacks and frontend hardening) → 0.2.4 (complete OIDC
 # transport dependencies) → 0.2.5 (truthful startup and resumable frontend)
 # → 0.3.0 (native EnergyPlus percentage progress + standard progress contract)
-# → 0.3.3 (shared self-contained browser lifecycle helper). Install a new version as a
+# → 0.3.3 (shared self-contained browser lifecycle helper) → 0.3.4
+# (provider-selectable Job and Service runtime). Install a new version as a
 # candidate, verify it, then activate it explicitly; existing blocks retain
 # their exact pin until an author upgrades them.
 
@@ -25,7 +26,7 @@ schema_version: "purelms.interactive_task.v1"
 
 slug: energyplus_single_zone
 name: EnergyPlus Single-Zone
-version: 0.3.3
+version: 0.3.4
 description: |
   Single-zone building-energy InteractiveTask. The learner picks a
   glazing U-value, window area, and climate zone; the backend
@@ -41,7 +42,7 @@ description: |
 
 backend:
   # Image name derives from slug by ``s/_/-/g`` →
-  # ``purelms-itask-energyplus-single-zone:0.3.3``.
+  # ``purelms-itask-energyplus-single-zone:0.3.4``.
   # Local builds via ``just build energyplus_single_zone`` tag with
   # ``:dev``; production deploys push to a registry with the
   # version tag.
@@ -53,6 +54,12 @@ backend:
   # The shared backend reporter maps it into sparse quarter-step callbacks.
   progress_reporting: percentage
   default_timeout_seconds: 30
+
+deployment:
+  portable_contract: purelms.portable_container.v1
+  required_capabilities:
+    - callbacks
+    - percentage_progress
 
 frontend:
   # Built via ``just frontend-build energyplus_single_zone`` to

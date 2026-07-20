@@ -88,7 +88,7 @@ build-all:
 # The signed GitHub release workflow remains the normal production publisher;
 # this explicit local path is useful for development and recovery. It never
 # pushes ``latest`` and never deploys the moving tag it was given: ``deploy``
-# resolves the tag to a digest before updating a Cloud Run Job.
+# resolves the tag to a digest before updating either Cloud Run route.
 #
 # Requires PURELMS_IMAGE_BASE (normally sourced from PureLMS's tracked .just
 # template), e.g. us-central1-docker.pkg.dev/<project>/purelms.
@@ -164,7 +164,7 @@ push slug image_tag="": (publish slug image_tag)
 #
 # Usage: just deploy energyplus_single_zone prod          # current vX.Y.Z
 # Usage: just deploy energyplus_single_zone staging v0.2.1
-deploy slug stage image_tag="": (_check-slug slug)
+deploy-job slug stage image_tag="": (_check-slug slug)
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -225,6 +225,8 @@ deploy slug stage image_tag="": (_check-slug slug)
         --release-ref "${TAG}" --slug "{{ slug }}" --stage "{{ stage }}")
     TASK_VERSION=$(python3 scripts/backend_inventory.py task-version \
         --release-ref "${TAG}" --slug "{{ slug }}")
+    TASK_TIMEOUT=$(python3 scripts/backend_inventory.py task-timeout \
+        --release-ref "${TAG}" --slug "{{ slug }}")
     TASK_VERSION_LABEL=$(printf '%s' "${TASK_VERSION}" | tr '.' '-')
     RELEASE_LABEL=$(printf '%s' "${TAG}" | tr '.' '-')
     MAIN_SA="purelms-cloudrun-{{ stage }}@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
@@ -244,14 +246,15 @@ deploy slug stage image_tag="": (_check-slug slug)
     fi
     PINNED_IMAGE="${IMAGE}@${DIGEST}"
 
-    # A versioned Job is part of the release record. Re-running deployment may
-    # refresh configuration and IAM, but it must never point that identity at
-    # different bytes. A changed digest requires a new task manifest version.
+    # A versioned Job is part of the release record. Re-running deployment
+    # repairs IAM but leaves the exact provider resource untouched. A changed
+    # digest requires a new task manifest version.
     EXISTING_JOB=$(gcloud run jobs list \
         --region="${GCP_REGION}" \
         --project="${GCP_PROJECT_ID}" \
         --filter="metadata.name=${JOB_NAME}" \
         --format='value(metadata.name)' | head -1)
+    CREATE_JOB=1
     if [ "${EXISTING_JOB}" = "${JOB_NAME}" ]; then
         EXISTING_IMAGE=$(gcloud run jobs describe "${JOB_NAME}" \
             --region="${GCP_REGION}" \
@@ -264,6 +267,8 @@ deploy slug stage image_tag="": (_check-slug slug)
             echo "  Bump the task manifest version and publish a new release."
             exit 1
         fi
+        CREATE_JOB=0
+        echo "✓ Retaining immutable Job ${JOB_NAME}; image digest already matches."
     fi
 
     if ! gcloud iam service-accounts describe "${BACKEND_SA}" \
@@ -281,20 +286,22 @@ deploy slug stage image_tag="": (_check-slug slug)
         --project="${GCP_PROJECT_ID}" \
         --quiet >/dev/null 2>&1 || true
 
-    echo "Deploying ${JOB_NAME} with ${PINNED_IMAGE}..."
-    retry_gcloud gcloud run jobs deploy "${JOB_NAME}" \
-        --image="${PINNED_IMAGE}" \
-        --region="${GCP_REGION}" \
-        --project="${GCP_PROJECT_ID}" \
-        --service-account="${BACKEND_SA}" \
-        --tasks=1 \
-        --parallelism=1 \
-        --cpu=1 \
-        --memory=2Gi \
-        --max-retries=0 \
-        --task-timeout=1800s \
-        --labels="managed-by=purelms,backend=${IMAGE_SLUG},task-version=${TASK_VERSION_LABEL},release=${RELEASE_LABEL},stage={{ stage }}" \
-        --quiet
+    if [ "${CREATE_JOB}" = "1" ]; then
+        echo "Deploying ${JOB_NAME} with ${PINNED_IMAGE}..."
+        retry_gcloud gcloud run jobs deploy "${JOB_NAME}" \
+            --image="${PINNED_IMAGE}" \
+            --region="${GCP_REGION}" \
+            --project="${GCP_PROJECT_ID}" \
+            --service-account="${BACKEND_SA}" \
+            --tasks=1 \
+            --parallelism=1 \
+            --cpu=1 \
+            --memory=2Gi \
+            --max-retries=0 \
+            --task-timeout="${TASK_TIMEOUT}s" \
+            --labels="managed-by=purelms,backend=${IMAGE_SLUG},task-version=${TASK_VERSION_LABEL},release=${RELEASE_LABEL},stage={{ stage }}" \
+            --quiet
+    fi
 
     echo "Granting ${MAIN_SA} permission to execute and inspect ${JOB_NAME}..."
     for role in roles/run.jobsExecutorWithOverrides roles/run.viewer; do
@@ -354,7 +361,148 @@ deploy slug stage image_tag="": (_check-slug slug)
     echo "✓ Callback IAM and Django identity agree on ${BACKEND_SA}"
     echo "✓ Backend identity has no simulation-bucket role"
 
-# Deploy every released backend image at the same repository release tag.
+# Deploy the same immutable task image as a private, request-driven Service.
+# Cloud Tasks invokes it with a dedicated OIDC identity; the Service runtime
+# uses only run-scoped signed object capabilities and authenticated callbacks.
+deploy-service slug stage image_tag="": (_check-slug slug)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    retry_gcloud() {
+        local attempt=1
+        local max_attempts=7
+        local delay=2
+        while true; do
+            if "$@"; then return 0; fi
+            if [ "${attempt}" -ge "${max_attempts}" ]; then
+                echo "✗ gcloud command still failed after ${max_attempts} attempts."
+                return 1
+            fi
+            echo "  Google Cloud IAM has not converged; retrying in ${delay}s."
+            sleep "${delay}"
+            attempt=$((attempt + 1))
+            delay=$((delay * 2))
+            if [ "${delay}" -gt 30 ]; then delay=30; fi
+        done
+    }
+    if [[ ! "{{ stage }}" =~ ^(dev|staging|prod)$ ]]; then
+        echo "✗ Stage must be dev, staging, or prod; got: {{ stage }}"
+        exit 1
+    fi
+    for var in GCP_PROJECT_ID GCP_REGION PURELMS_IMAGE_BASE \
+        PURELMS_WORKER_SERVICE_BASE; do
+        if [ -z "${!var:-}" ]; then
+            echo "✗ ${var} is not set. Source the PureLMS GCP .just file."
+            exit 1
+        fi
+    done
+
+    VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -1)
+    TAG="{{ image_tag }}"
+    TAG="${TAG:-v${VERSION}}"
+    if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "✗ Image tag must be vX.Y.Z; got: ${TAG}"
+        exit 1
+    fi
+    git verify-tag "${TAG}"
+
+    SUFFIX=$(if [ "{{ stage }}" = "prod" ]; then printf ''; else printf '%s' '-{{ stage }}'; fi)
+    IMAGE_SLUG=$(printf '%s' "{{ slug }}" | tr '_' '-')
+    IMAGE="${PURELMS_IMAGE_BASE}/purelms-itask-${IMAGE_SLUG}"
+    DIGEST=$(gcloud artifacts docker images describe "${IMAGE}:${TAG}" \
+        --project="${GCP_PROJECT_ID}" --format='value(image_summary.digest)')
+    if [[ ! "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        echo "✗ Artifact Registry did not return a valid digest for ${IMAGE}:${TAG}."
+        exit 1
+    fi
+    PINNED_IMAGE="${IMAGE}@${DIGEST}"
+    SERVICE_NAME=$(python3 scripts/backend_inventory.py service-name \
+        --release-ref "${TAG}" --slug "{{ slug }}" --stage "{{ stage }}")
+    TASK_VERSION=$(python3 scripts/backend_inventory.py task-version \
+        --release-ref "${TAG}" --slug "{{ slug }}")
+    TASK_TIMEOUT=$(python3 scripts/backend_inventory.py task-timeout \
+        --release-ref "${TAG}" --slug "{{ slug }}")
+    REQUEST_TIMEOUT=$((TASK_TIMEOUT + 60))
+    if [ "${REQUEST_TIMEOUT}" -ge 1800 ]; then REQUEST_TIMEOUT=1799; fi
+    TASK_VERSION_LABEL=$(printf '%s' "${TASK_VERSION}" | tr '.' '-')
+    RELEASE_LABEL=$(printf '%s' "${TAG}" | tr '.' '-')
+    BACKEND_SA="purelms-sim-{{ stage }}@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
+    BACKEND_SA_NAME="purelms-sim-{{ stage }}"
+    INVOKER_SA_NAME="purelms-sim-invoker-{{ stage }}"
+    INVOKER_SA="${INVOKER_SA_NAME}@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
+    MAIN_SA="purelms-cloudrun-{{ stage }}@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
+    WORKER_SERVICE="${PURELMS_WORKER_SERVICE_BASE}${SUFFIX}"
+
+    if ! gcloud iam service-accounts describe "${BACKEND_SA}" \
+            --project="${GCP_PROJECT_ID}" >/dev/null 2>&1; then
+        gcloud iam service-accounts create "${BACKEND_SA_NAME}" \
+            --display-name="PureLMS {{ stage }} simulation backends" \
+            --project="${GCP_PROJECT_ID}"
+    fi
+
+    if ! gcloud iam service-accounts describe "${INVOKER_SA}" \
+            --project="${GCP_PROJECT_ID}" >/dev/null 2>&1; then
+        gcloud iam service-accounts create "${INVOKER_SA_NAME}" \
+            --display-name="PureLMS {{ stage }} provider task invoker" \
+            --project="${GCP_PROJECT_ID}"
+    fi
+    retry_gcloud gcloud iam service-accounts add-iam-policy-binding "${INVOKER_SA}" \
+        --member="serviceAccount:${MAIN_SA}" \
+        --role="roles/iam.serviceAccountUser" \
+        --project="${GCP_PROJECT_ID}" --quiet >/dev/null
+
+    EXISTING_IMAGE=$(gcloud run services describe "${SERVICE_NAME}" \
+        --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
+        --format='value(spec.template.spec.containers[0].image)' 2>/dev/null || true)
+    if [ -n "${EXISTING_IMAGE}" ] && [ "${EXISTING_IMAGE}" != "${PINNED_IMAGE}" ]; then
+        echo "✗ Refusing to repoint immutable Service ${SERVICE_NAME}."
+        echo "  deployed: ${EXISTING_IMAGE}"
+        echo "  requested: ${PINNED_IMAGE}"
+        exit 1
+    fi
+    if [ -z "${EXISTING_IMAGE}" ]; then
+        retry_gcloud gcloud run deploy "${SERVICE_NAME}" \
+            --image="${PINNED_IMAGE}" \
+            --region="${GCP_REGION}" \
+            --project="${GCP_PROJECT_ID}" \
+            --service-account="${BACKEND_SA}" \
+            --no-allow-unauthenticated \
+            --ingress=internal \
+            --cpu=1 \
+            --memory=2Gi \
+            --concurrency=1 \
+            --timeout="${REQUEST_TIMEOUT}s" \
+            --min-instances=0 \
+            --max-instances=20 \
+            --cpu-boost \
+            --execution-environment=gen2 \
+            --set-env-vars=PURELMS_RUNTIME_MODE=service \
+            --labels="managed-by=purelms,backend=${IMAGE_SLUG},task-version=${TASK_VERSION_LABEL},release=${RELEASE_LABEL},stage={{ stage }}" \
+            --quiet
+    else
+        echo "✓ Retaining immutable Service ${SERVICE_NAME}; image digest already matches."
+    fi
+
+    retry_gcloud gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
+        --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
+        --member="serviceAccount:${INVOKER_SA}" \
+        --role="roles/run.invoker" --quiet >/dev/null
+    retry_gcloud gcloud run services add-iam-policy-binding "${WORKER_SERVICE}" \
+        --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
+        --member="serviceAccount:${BACKEND_SA}" \
+        --role="roles/run.invoker" --quiet >/dev/null
+
+    SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" \
+        --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
+        --format='value(status.url)')
+    echo "✓ ${SERVICE_NAME} deployed at ${PINNED_IMAGE}"
+    echo "✓ private URL: ${SERVICE_URL}"
+
+# Provision both supported GCP routes for one immutable task release.
+deploy slug stage image_tag="": (_check-slug slug)
+    just deploy-job "{{ slug }}" "{{ stage }}" "{{ image_tag }}"
+    just deploy-service "{{ slug }}" "{{ stage }}" "{{ image_tag }}"
+
+# Deploy every released backend image as both supported GCP route types.
 deploy-all stage image_tag="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -362,7 +510,7 @@ deploy-all stage image_tag="":
         just deploy "${slug}" "{{ stage }}" "{{ image_tag }}"
     done
 
-# Describe one exact tagged task Job without executing it.
+# Describe both exact tagged task routes without executing them.
 status slug stage="prod" image_tag="": (_check-slug slug)
     #!/usr/bin/env bash
     set -euo pipefail
@@ -377,7 +525,12 @@ status slug stage="prod" image_tag="": (_check-slug slug)
     TAG="${TAG:-v${VERSION}}"
     JOB_NAME=$(python3 scripts/backend_inventory.py job-name \
         --release-ref "${TAG}" --slug "{{ slug }}" --stage "{{ stage }}")
+    SERVICE_NAME=$(python3 scripts/backend_inventory.py service-name \
+        --release-ref "${TAG}" --slug "{{ slug }}" --stage "{{ stage }}")
     gcloud run jobs describe "${JOB_NAME}" \
+        --region="${GCP_REGION}" \
+        --project="${GCP_PROJECT_ID}"
+    gcloud run services describe "${SERVICE_NAME}" \
         --region="${GCP_REGION}" \
         --project="${GCP_PROJECT_ID}"
 

@@ -12,10 +12,14 @@ from __future__ import annotations
 from purelms_itask_runtime.runtime import DEFAULT_PROGRESS_MILESTONES
 from purelms_itask_runtime.runtime import CallbackAuthenticationError
 from purelms_itask_runtime.runtime import CompleteCallbackError
+from purelms_itask_runtime.runtime import ObjectIdentity
+from purelms_itask_runtime.runtime import ObjectNotFoundError
 from purelms_itask_runtime.runtime import ProgressReporter
 from purelms_itask_runtime.runtime import RuntimeConfigError
 from purelms_itask_runtime.runtime import RuntimeLocation
 from purelms_itask_runtime.runtime import make_progress_reporter
+from purelms_itask_runtime.runtime import notify_existing_output
+from purelms_itask_runtime.runtime import read_existing_output
 from purelms_itask_runtime.runtime import read_input_envelope
 from purelms_itask_runtime.runtime import write_output_envelope
 
@@ -23,10 +27,14 @@ __all__ = [
     "DEFAULT_PROGRESS_MILESTONES",
     "CallbackAuthenticationError",
     "CompleteCallbackError",
+    "ObjectIdentity",
+    "ObjectNotFoundError",
     "ProgressReporter",
     "RuntimeConfigError",
     "RuntimeLocation",
     "make_progress_reporter",
+    "notify_existing_output",
+    "read_existing_output",
     "read_input_envelope",
     "write_output_envelope",
 ]

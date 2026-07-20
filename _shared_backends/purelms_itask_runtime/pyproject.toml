@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "purelms-itask-runtime"
-version = "0.2.0"
+version = "0.3.0"
 description = "Shared runtime helper for PureLMS InteractiveTask backend containers: local or signed-object envelope I/O plus authenticated callbacks."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Only the async / Cloud Run Jobs deployment needs this — OIDC tokens for
+# Only managed cloud deployment needs this — OIDC tokens for
 # worker callbacks. Signed object I/O uses the standard library. The local
 # (sync) path reads/writes local dirs and posts no callbacks, so it runs
 # without them. The deployed image installs ``purelms-itask-runtime[cloud]``.

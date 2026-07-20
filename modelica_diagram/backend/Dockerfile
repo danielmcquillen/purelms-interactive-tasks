@@ -37,7 +37,7 @@ ARG PURELMS_IMAGE_VERSION="dev"
 ARG PURELMS_IMAGE_REVISION="unknown"
 ARG PURELMS_IMAGE_SOURCE="https://github.com/danielmcquillen/purelms-interactive-tasks"
 ARG PURELMS_BACKEND_SLUG="modelica_diagram"
-ARG PURELMS_TASK_VERSION="0.2.10"
+ARG PURELMS_TASK_VERSION="0.2.11"
 ARG PURELMS_SHARED_VERSION="0.5.0"
 
 LABEL org.opencontainers.image.title="PureLMS Modelica Diagram InteractiveTask backend" \
@@ -65,4 +65,4 @@ ENV PYTHONPATH=/pkgs
 # Convention paths the LMS DockerComposeExecutionBackend mounts:
 ENV PURELMS_INPUT_DIR=/purelms/input
 ENV PURELMS_OUTPUT_DIR=/purelms/output
-ENTRYPOINT ["python", "/app/main.py"]
+ENTRYPOINT ["python", "-m", "purelms_itask_runtime.entrypoint", "/app/main.py"]

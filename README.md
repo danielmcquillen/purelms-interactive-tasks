@@ -51,7 +51,7 @@ purelms-interactive-tasks/
 
 ## The contracts (three edges)
 
-1. **Container ↔ LMS**: every backend uses `purelms_itask_runtime`. Local Docker reads `$PURELMS_INPUT_DIR/input.json` and writes `$PURELMS_OUTPUT_DIR/output.json`; Cloud Run Jobs reads and writes immutable `gs://` objects through `$PURELMS_INPUT_URI` and `$PURELMS_OUTPUT_URI`, then posts progress and completion callbacks. Both envelope schemas live in [`purelms-shared`](https://github.com/danielmcquillen/purelms-shared), and the backend's domain code is identical in both modes.
+1. **Container ↔ LMS**: every backend uses `purelms_itask_runtime`. Local Docker reads `$PURELMS_INPUT_DIR/input.json` and writes `$PURELMS_OUTPUT_DIR/output.json`; managed Jobs and Services read and write immutable `gs://` objects through run-scoped signed capabilities, then post progress and completion notifications. `output.json` is authoritative. Both envelope schemas live in [`purelms-shared`](https://github.com/danielmcquillen/purelms-shared), and domain code is identical in one-shot Job and replay-safe HTTP Service modes.
 
 2. **Frontend ↔ LMS** (in-browser): the frontend bundle exports `mount(element, config, helpers)`. The LMS's dispatcher (in `purelms/static/src/ts/sims/`) dynamic-imports the bundle at runtime and calls `mount(...)`. The `helpers` arg gives the bundle typed access to `api.submit`, `api.pollStatus` (an async iterator that yields run-status snapshots until terminal — terminal snapshots carry the outputs), `escape` for HTML-safe text, and shared UI including a Bootstrap progress controller already bound to the backend's `none` or `percentage` capability.
 
@@ -71,8 +71,8 @@ The [`BACKEND_AUTHORING_GUIDE.md`](BACKEND_AUTHORING_GUIDE.md) is the in-repo re
 4. Implement `backend/main.py` + `backend/Dockerfile` using the runtime helper in `_template/backend/main.py`. It handles both local-directory and Cloud Run/GCS envelope I/O.
 5. Implement `frontend/src/<slug>.ts` exporting `mount(...)`. Build to `frontend/dist/<slug>.js`.
 6. Add tests under `backend/tests/` and `frontend/tests/`.
-8. Run `just test <your_slug>` and `just smoke <your_slug>`. The smoke recipe builds and executes the same `linux/amd64` target used by Cloud Run; Docker Desktop emulates it on Apple Silicon.
-9. Install into a PureLMS instance:
+7. Run `just test <your_slug>` and `just smoke <your_slug>`. The smoke recipe builds and executes the same `linux/amd64` target used by Cloud Run; Docker Desktop emulates it on Apple Silicon.
+8. Install into a PureLMS instance:
    ```bash
    cd path/to/purelms
    uv run python manage.py install_interactive_task ../purelms-interactive-tasks/<your_slug>
@@ -83,7 +83,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full checklist, and [`BACKEND_A
 ## Container architecture policy
 
 The production and supported local target is `linux/amd64`. GitHub Actions,
-the local build/publish recipes, the smoke runner, and Cloud Run Jobs all use
+the local build/publish recipes, the smoke runner, and Cloud Run all use
 that target. On an Apple-Silicon Mac, Docker Desktop runs the image under
 emulation. This is an intentional production-parity choice: EnergyPlus ships
 an x86-64 Linux executable and the committed Modelica FMU contains x86-64
@@ -114,8 +114,11 @@ just backends stage-bundles vX.Y.Z
 git add purelms/static/backends
 git commit -m "build(simulations): stage vX.Y.Z frontend bundles"
 just gcp deploy-all prod
-just backends deploy energyplus_single_zone prod
-just backends deploy-all prod
+just backends rollout-candidate prod vX.Y.Z \
+  "DEPLOY vX.Y.Z TO prod" <operator-email>
+# After published-learner and draft View-as-Student acceptance:
+just gcp promote-interactive-task-release prod vX.Y.Z <operator-email> \
+  "ACTIVATE vX.Y.Z ON prod"
 ```
 
 The staging step builds frontend bundles from the exact signed tag, using only
@@ -124,16 +127,16 @@ tracked static tree. It never uses a developer checkout's `node_modules`. The
 LMS must be committed and deployed before the matching backend release can be
 registered; backend deploys verify this ordering against the live Django image.
 
-`deploy` resolves the default `v<pyproject version>` tag to its Artifact
-Registry digest and deploys `IMAGE@sha256:...`; the Cloud Run Job never points
-at `latest`. Prod uses `purelms-itask-<slug>`, while dev and staging append the
-stage name. Each stage gets a dedicated `purelms-sim-<stage>` runtime service
-account with simulation-bucket and worker-callback access only.
+Deployment resolves the signed tag to its Artifact Registry digest and deploys
+both an exact Job and private Service with `IMAGE@sha256:...`; neither points at
+`latest`. Each stage has a backend runtime identity with callback permission
+and no bucket role, plus a dedicated OIDC invoker for private task Services.
 
 After deployment, one `purelms-register-backends[-<stage>]` Job reconciles the
-tagged inventory into the LMS. `deploy-all` submits every released entry in one
-transactional catalog; `deploy <slug>` submits one selected entry through the
-same Job. Missing catalog entries are never deactivated implicitly.
+tagged inventory into the LMS as inactive releases and `DRAFT` deployments.
+Verification proves live Service identity/configuration before `READY`; explicit
+promotion activates the route and authoring default. Missing catalog entries
+are never deactivated implicitly.
 
 On the first deployment to a stage, Google Cloud can take a minute or more to
 make that new service account visible to Cloud Storage and Cloud Run. The
