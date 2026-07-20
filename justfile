@@ -451,6 +451,14 @@ deploy-service slug stage image_tag="": (_check-slug slug)
         --member="serviceAccount:${MAIN_SA}" \
         --role="roles/iam.serviceAccountUser" \
         --project="${GCP_PROJECT_ID}" --quiet >/dev/null
+    # A template-level capacity update creates a new revision that retains the
+    # dedicated backend runtime identity, so the updater must be allowed to
+    # attach that exact identity. The role is bound on this service account,
+    # not at project scope.
+    retry_gcloud gcloud iam service-accounts add-iam-policy-binding "${BACKEND_SA}" \
+        --member="serviceAccount:${MAIN_SA}" \
+        --role="roles/iam.serviceAccountUser" \
+        --project="${GCP_PROJECT_ID}" --quiet >/dev/null
 
     # Activation and capacity presets update only bounded Service fields. A
     # dedicated role avoids granting the LMS delete, shell, or deploy access.
