@@ -640,3 +640,5 @@ def test_service_route_is_private_digest_pinned_and_request_driven() -> None:
     assert "--cpu-boost" in recipe
     assert "PURELMS_RUNTIME_MODE=service" in recipe
     assert "roles/run.invoker" in recipe
+    assert '--member="serviceAccount:${MAIN_SA}"' in recipe
+    assert "roles/run.viewer" in recipe
