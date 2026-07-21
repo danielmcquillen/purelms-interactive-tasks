@@ -652,8 +652,7 @@ def test_service_route_is_private_digest_pinned_and_request_driven() -> None:
     assert "gcloud artifacts repositories add-iam-policy-binding" in recipe
     assert '--role="roles/artifactregistry.reader"' in recipe
     assert (
-        'gcloud iam service-accounts add-iam-policy-binding "${BACKEND_SA}"'
-        in recipe
+        'gcloud iam service-accounts add-iam-policy-binding "${BACKEND_SA}"' in recipe
     )
     assert '--role="roles/iam.serviceAccountUser"' in recipe
     assert "roles/run.developer" not in recipe
